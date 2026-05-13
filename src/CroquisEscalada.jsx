@@ -10,6 +10,7 @@ import { collection, doc, addDoc, updateDoc, getDocs, getDoc, serverTimestamp, a
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { useAuth } from './contexts/AuthContext';
 import LocationPicker from './components/LocationPicker';
+import { procesarImagenParaSubir, formatearMB, MAX_MB } from './utils/imagen';
 
 const COLORES = ['#e74c3c', '#3498db', '#2ecc71', '#f1c40f', '#9b59b6', '#e67e22', '#1abc9c', '#e84393'];
 
@@ -42,6 +43,7 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
 
     const [imagenUrl, setImagenUrl] = useState(croquisInicial?.imagenUrl || null);
     const [imagenEsArchivo, setImagenEsArchivo] = useState(false);
+    const [imagenFile, setImagenFile] = useState(null); // File original para compresión
     const [imgSize, setImgSize] = useState({ w: 800, h: 600 });
     const [vias, setVias] = useState(croquisInicial?.vias || []);
     const [visibilidad, setVisibilidad] = useState(croquisInicial?.visibilidad || 'publico');
@@ -64,7 +66,7 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
     const [viaActual, setViaActual] = useState({
         inicio: null, fin: null, intermedios: [], textos: [],
         info: { nombre: '', grado: '', equipador: '', info: '', anio: '' },
-        color: COLORES[0]
+        color: COLORES[0], grosor: 4
     });
 
     const [infoCroquis, setInfoCroquis] = useState(croquisInicial?.infoCroquis || INFO_CROQUIS_INIT);
@@ -77,6 +79,8 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
     const [mapsEmbedUrl, setMapsEmbedUrl] = useState('');
     const [mostrarModalInfo, setMostrarModalInfo] = useState(false);
     const [viaVisualizando, setViaVisualizando] = useState(null);
+    const [modalGradoPos, setModalGradoPos] = useState(null); // {x,y} al clicar con tool GRADO
+    const [gradoTemp, setGradoTemp] = useState('');
     const [mostrarCapas, setMostrarCapas] = useState(false);
     const [capas, setCapas] = useState(croquisInicial?.capas || []);
 
@@ -120,11 +124,17 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
     // ─── CARGA DE IMAGEN ───
     const handleCargaArchivo = (e) => {
         const file = e.target.files[0];
-        if (file) {
-            const reader = new FileReader();
-            reader.onload = (ev) => { procesarImagen(ev.target.result); setImagenEsArchivo(true); };
-            reader.readAsDataURL(file);
+        if (!file) return;
+        const mb = file.size / (1024 * 1024);
+        if (mb > MAX_MB) {
+            alert(`La imagen pesa ${formatearMB(file.size)} y supera el límite de ${MAX_MB} MB.\nUsa una foto de menor resolución.`);
+            e.target.value = '';
+            return;
         }
+        setImagenFile(file);
+        const reader = new FileReader();
+        reader.onload = (ev) => { procesarImagen(ev.target.result); setImagenEsArchivo(true); };
+        reader.readAsDataURL(file);
     };
 
     const procesarImagen = (src) => {
@@ -152,15 +162,38 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
             let urlFinal = imagenEsArchivo ? null : imagenUrl;
 
             if (imagenEsArchivo && imagenUrl) {
-                setProgresoSubida('Subiendo imagen…');
+                // Comprimir si hace falta antes de subir
+                const fileParaSubir = imagenFile || (() => {
+                    // Fallback: convertir dataURL a File
+                    const arr = imagenUrl.split(',');
+                    const mime = arr[0].match(/:(.*?);/)[1];
+                    const bstr = atob(arr[1]);
+                    const u8arr = new Uint8Array(bstr.length);
+                    for (let i = 0; i < bstr.length; i++) u8arr[i] = bstr.charCodeAt(i);
+                    return new File([u8arr], 'croquis.jpg', { type: mime });
+                })();
+
+                const resultado = await procesarImagenParaSubir(fileParaSubir, setProgresoSubida);
+
+                if (resultado.error) {
+                    alert(resultado.error);
+                    setGuardando(false);
+                    setProgresoSubida('');
+                    return;
+                }
+
+                if (resultado.comprimida) {
+                    setProgresoSubida(`Subiendo imagen (${formatearMB(resultado.blob.size)}, comprimida de ${resultado.originalMB.toFixed(1)} MB)…`);
+                } else {
+                    setProgresoSubida('Subiendo imagen…');
+                }
+
                 const uid = auth.currentUser?.uid || 'anonimo';
-                const nombreArchivo = `croquis/${uid}/${Date.now()}.jpg`;
-                const storageRef = ref(storage, nombreArchivo);
-                const res = await fetch(imagenUrl);
-                const blob = await res.blob();
-                await uploadBytes(storageRef, blob);
+                const storageRef = ref(storage, `croquis/${uid}/${Date.now()}.jpg`);
+                await uploadBytes(storageRef, resultado.blob);
                 urlFinal = await getDownloadURL(storageRef);
                 setImagenEsArchivo(false);
+                setImagenFile(null);
                 setImagenUrl(urlFinal);
                 setProgresoSubida('');
             }
@@ -285,9 +318,12 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
             setViaActual(prev => ({ ...prev, fin: { x, y } }));
         } else if (herramienta === 'INTERMEDIO') {
             setViaActual(prev => ({ ...prev, intermedios: [...prev.intermedios, { x, y }] }));
-        } else if (herramienta === 'GRADO' || herramienta === 'TEXTO') {
-            const txt = prompt(`Introduce el ${herramienta.toLowerCase()}:`);
-            if (txt) setViaActual(prev => ({ ...prev, textos: [...prev.textos, { text: txt, x, y, type: herramienta.toLowerCase() }] }));
+        } else if (herramienta === 'GRADO') {
+            setGradoTemp('');
+            setModalGradoPos({ x, y });
+        } else if (herramienta === 'TEXTO') {
+            const txt = prompt('Introduce el texto:');
+            if (txt) setViaActual(prev => ({ ...prev, textos: [...prev.textos, { text: txt, x, y, type: 'texto' }] }));
         }
     };
 
@@ -298,7 +334,7 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
         setViaActual({
             inicio: null, fin: null, intermedios: [], textos: [],
             info: { nombre: '', grado: '', equipador: '', info: '', anio: '' },
-            color: COLORES[vias.length % COLORES.length]
+            color: COLORES[vias.length % COLORES.length], grosor: 4
         });
     };
 
@@ -478,9 +514,26 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
                             <Info size={18} /> Info de la Vía
                         </button>
                     </div>
+                    {/* Paleta de colores + grosor */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginTop: 8, flexWrap: 'wrap' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                            <span style={{ fontSize: '0.78rem', color: '#7f8c8d', fontWeight: 'bold' }}>Color:</span>
+                            {COLORES.map(c => (
+                                <div key={c} onClick={() => setViaActual(p => ({ ...p, color: c }))}
+                                    style={{ width: 24, height: 24, borderRadius: '50%', background: c, cursor: 'pointer', border: viaActual.color === c ? '3px solid #2c3e50' : '2px solid white', boxShadow: viaActual.color === c ? '0 0 0 2px #2c3e50' : '0 1px 4px rgba(0,0,0,0.2)', transform: viaActual.color === c ? 'scale(1.25)' : 'scale(1)' }} />
+                            ))}
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                            <span style={{ fontSize: '0.78rem', color: '#7f8c8d', fontWeight: 'bold' }}>Grosor:</span>
+                            <input type="range" min="1" max="14" value={viaActual.grosor || 4}
+                                onChange={e => setViaActual(p => ({ ...p, grosor: parseInt(e.target.value) }))}
+                                style={{ width: 90, accentColor: viaActual.color }} />
+                            <span style={{ fontSize: '0.8rem', fontWeight: 'bold', color: '#2c3e50', minWidth: 18 }}>{viaActual.grosor || 4}</span>
+                        </div>
+                    </div>
                     {herramienta !== 'PAN' && (
-                        <div style={{ fontSize: '0.85rem', color: '#e74c3c', fontWeight: 'bold', marginTop: 8 }}>
-                            Haz clic sobre la imagen para añadir: {herramienta}
+                        <div style={{ fontSize: '0.85rem', color: '#e74c3c', fontWeight: 'bold', marginTop: 6 }}>
+                            Clic en la imagen para añadir: {herramienta}
                         </div>
                     )}
                 </div>
@@ -489,8 +542,23 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
             {/* BARRA HERRAMIENTAS (editando) */}
             {editandoViaIdx !== null && (
                 <div style={{ ...st.toolsBar, background: '#fff3cd', padding: '10px 20px' }}>
-                    <div style={{ color: '#856404', fontWeight: 'bold', fontSize: '0.9rem' }}>
-                        Editando: <b>{vias[editandoViaIdx]?.info.nombre}</b> — Arrastra los puntos para moverlos · Pulsa × para eliminarlos
+                    <div style={{ color: '#856404', fontWeight: 'bold', fontSize: '0.9rem', marginBottom: 8 }}>
+                        Editando: <b>{vias[editandoViaIdx]?.info.nombre}</b> — Arrastra los puntos · Pulsa × para eliminarlos
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <span style={{ fontSize: '0.78rem', fontWeight: 'bold', color: '#856404' }}>Grosor:</span>
+                        <input type="range" min="1" max="14"
+                            value={vias[editandoViaIdx]?.grosor || 4}
+                            onChange={e => {
+                                const g = parseInt(e.target.value);
+                                setVias(prev => {
+                                    const copia = [...prev];
+                                    copia[editandoViaIdx] = { ...copia[editandoViaIdx], grosor: g };
+                                    return copia;
+                                });
+                            }}
+                            style={{ width: 100, accentColor: vias[editandoViaIdx]?.color }} />
+                        <span style={{ fontSize: '0.82rem', fontWeight: 'bold', minWidth: 18, color: '#856404' }}>{vias[editandoViaIdx]?.grosor || 4}</span>
                     </div>
                 </div>
             )}
@@ -530,13 +598,20 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
                             const isEditing = editandoViaIdx === idx;
                             return (
                                 <g key={via.id}>
-                                    <path d={generarCurvaSuave(pts)} fill="none" stroke="black" strokeWidth="6" opacity="0.5" />
-                                    <path d={generarCurvaSuave(pts)} fill="none" stroke={via.color} strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" />
+                                    <path d={generarCurvaSuave(pts)} fill="none" stroke="black" strokeWidth={(via.grosor || 4) + 2} opacity="0.4" />
+                                    <path d={generarCurvaSuave(pts)} fill="none" stroke={via.color} strokeWidth={via.grosor || 4} strokeLinecap="round" strokeLinejoin="round" />
                                     {via.textos.map((txt, i) => <TextoSvg key={i} txt={txt} color={via.color} />)}
                                     {via.inicio && (
                                         <>
                                             <circle cx={via.inicio.x} cy={via.inicio.y + 20} r="15" fill={via.color} />
                                             <text x={via.inicio.x} y={via.inicio.y + 25} fill="white" fontSize="16" fontWeight="bold" textAnchor="middle">{idx + 1}</text>
+                                        </>
+                                    )}
+                                    {via.fin && (
+                                        <>
+                                            <circle cx={via.fin.x} cy={via.fin.y} r="18" fill="none" stroke={via.color} strokeWidth="4" opacity="0.6" />
+                                            <circle cx={via.fin.x} cy={via.fin.y} r="11" fill={via.color} stroke="white" strokeWidth="2.5" />
+                                            <text x={via.fin.x} y={via.fin.y + 5} fill="white" fontSize="13" fontWeight="bold" textAnchor="middle">✓</text>
                                         </>
                                     )}
                                     {isEditing && (
@@ -567,7 +642,7 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
 
                         {creando && (
                             <g>
-                                <path d={generarCurvaSuave(puntosViaActual)} fill="none" stroke={viaActual.color} strokeWidth="4" strokeDasharray="8,8" />
+                                <path d={generarCurvaSuave(puntosViaActual)} fill="none" stroke={viaActual.color} strokeWidth={viaActual.grosor || 4} strokeDasharray="8,8" />
                                 {viaActual.textos.map((txt, i) => <TextoSvg key={i} txt={txt} color={viaActual.color} />)}
                                 {viaActual.inicio && (
                                     <PuntoEditable
@@ -589,11 +664,14 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
                                         contenedorRef={contenedorRef} pan={pan} scale={scale} />
                                 ))}
                                 {viaActual.fin && (
-                                    <PuntoEditable
-                                        x={viaActual.fin.x} y={viaActual.fin.y} color="#2ecc71"
-                                        onMove={(x, y) => setViaActual(p => ({ ...p, fin: { x, y } }))}
-                                        onDelete={() => setViaActual(p => ({ ...p, fin: null }))}
-                                        contenedorRef={contenedorRef} pan={pan} scale={scale} />
+                                    <>
+                                        <circle cx={viaActual.fin.x} cy={viaActual.fin.y} r="20" fill="none" stroke={viaActual.color} strokeWidth="3" strokeDasharray="4,3" opacity="0.7" />
+                                        <PuntoEditable
+                                            x={viaActual.fin.x} y={viaActual.fin.y} color="#2ecc71"
+                                            onMove={(x, y) => setViaActual(p => ({ ...p, fin: { x, y } }))}
+                                            onDelete={() => setViaActual(p => ({ ...p, fin: null }))}
+                                            contenedorRef={contenedorRef} pan={pan} scale={scale} />
+                                    </>
                                 )}
                             </g>
                         )}
@@ -708,7 +786,10 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
                         </div>
                         <div style={st.modalBody}>
                             <InputModal label="Nombre *" value={viaActual.info.nombre} onChange={v => setViaActual(p => ({ ...p, info: { ...p.info, nombre: v } }))} ph="Ej: La Vía Láctea" />
-                            <InputModal label="Grado propuesto" value={viaActual.info.grado} onChange={v => setViaActual(p => ({ ...p, info: { ...p.info, grado: v } }))} ph="Ej: 6b+" />
+                            <div style={{ marginBottom: 15 }}>
+                                <label style={st.label}>Grado propuesto</label>
+                                <GradeSelector value={viaActual.info.grado} onChange={v => setViaActual(p => ({ ...p, info: { ...p.info, grado: v } }))} />
+                            </div>
                             <InputModal label="Equipador/a" value={viaActual.info.equipador} onChange={v => setViaActual(p => ({ ...p, info: { ...p.info, equipador: v } }))} ph="Nombre de quien equipó" />
                             <InputModal label="Año" value={viaActual.info.anio} onChange={v => setViaActual(p => ({ ...p, info: { ...p.info, anio: v } }))} type="number" ph="Ej: 2018" />
                             <label style={st.label}>Información adicional</label>
@@ -741,6 +822,32 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
                                 <strong style={{ color: '#7f8c8d' }}>Información técnica:</strong>
                                 <p style={{ margin: '10px 0 0', whiteSpace: 'pre-wrap' }}>{viaVisualizando.info.info || 'Sin información adicional.'}</p>
                             </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* MODAL: Selección de grado (herramienta GRADO) */}
+            {modalGradoPos && (
+                <div style={st.overlayModal}>
+                    <div style={{ ...st.modal, maxWidth: 420 }}>
+                        <div style={st.modalHeader}>
+                            <h3>Seleccionar grado</h3>
+                            <button onClick={() => setModalGradoPos(null)} style={st.btnClose}><X size={20} /></button>
+                        </div>
+                        <div style={st.modalBody}>
+                            <GradeSelector value={gradoTemp} onChange={setGradoTemp} />
+                            <button
+                                onClick={() => {
+                                    if (gradoTemp) {
+                                        setViaActual(prev => ({ ...prev, textos: [...prev.textos, { text: gradoTemp, x: modalGradoPos.x, y: modalGradoPos.y, type: 'grado' }] }));
+                                    }
+                                    setModalGradoPos(null);
+                                }}
+                                style={{ ...st.btnPrimario, width: '100%', marginTop: 20, justifyContent: 'center' }}
+                            >
+                                {gradoTemp ? `Añadir "${gradoTemp}"` : 'Cancelar'}
+                            </button>
                         </div>
                     </div>
                 </div>
@@ -900,6 +1007,81 @@ const InputModal = ({ label, value, onChange, ph, type = "text" }) => (
         <input type={type} value={value} onChange={e => onChange(e.target.value)} placeholder={ph} style={st.input} />
     </div>
 );
+
+function GradeSelector({ value, onChange }) {
+    const numMatch = value?.match(/^(\d)/);
+    const letMatch = value?.match(/[abc]/);
+    const hasPlus = value?.includes('+') ?? false;
+    const hasQ = value?.includes('?') ?? false;
+    const num = numMatch ? numMatch[1] : '';
+    const letra = letMatch ? letMatch[0] : '';
+
+    const build = (n, l, p, q) => {
+        if (!n) return '';
+        return `${n}${l}${p ? '+' : ''}${q ? '?' : ''}`;
+    };
+
+    const btnStyle = (activo, color) => ({
+        width: 34, height: 34, borderRadius: 7, border: '2px solid', cursor: 'pointer', fontWeight: 'bold', fontSize: '0.95rem',
+        borderColor: activo ? color : '#ddd',
+        background: activo ? color : 'white',
+        color: activo ? 'white' : '#444',
+        transition: 'all 0.1s',
+    });
+
+    return (
+        <div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center' }}>
+                {/* Número */}
+                <div>
+                    <div style={{ fontSize: '0.72rem', color: '#7f8c8d', marginBottom: 4, fontWeight: 'bold' }}>NÚMERO</div>
+                    <div style={{ display: 'flex', gap: 4 }}>
+                        {['4','5','6','7','8','9'].map(n => (
+                            <button key={n} type="button" onClick={() => onChange(build(n === num ? '' : n, letra, hasPlus, hasQ))}
+                                style={btnStyle(num === n, '#e74c3c')}>{n}</button>
+                        ))}
+                    </div>
+                </div>
+                {/* Letra */}
+                <div>
+                    <div style={{ fontSize: '0.72rem', color: '#7f8c8d', marginBottom: 4, fontWeight: 'bold' }}>LETRA</div>
+                    <div style={{ display: 'flex', gap: 4 }}>
+                        {['a','b','c'].map(l => (
+                            <button key={l} type="button" onClick={() => onChange(build(num, letra === l ? '' : l, hasPlus, hasQ))}
+                                style={btnStyle(letra === l, '#3498db')}>{l}</button>
+                        ))}
+                    </div>
+                </div>
+                {/* Modificadores */}
+                <div>
+                    <div style={{ fontSize: '0.72rem', color: '#7f8c8d', marginBottom: 4, fontWeight: 'bold' }}>MOD.</div>
+                    <div style={{ display: 'flex', gap: 4 }}>
+                        <button type="button" onClick={() => onChange(build(num, letra, !hasPlus, hasQ))}
+                            style={btnStyle(hasPlus, '#9b59b6')}>+</button>
+                        <button type="button" onClick={() => onChange(build(num, letra, hasPlus, !hasQ))}
+                            style={btnStyle(hasQ, '#f39c12')}>?</button>
+                    </div>
+                </div>
+                {/* Preview */}
+                <div style={{ marginTop: 18 }}>
+                    {value ? (
+                        <div style={{ padding: '6px 16px', background: '#f8f9fa', border: '2px solid #ecf0f1', borderRadius: 8, fontWeight: 'bold', fontSize: '1.3rem', color: '#e74c3c', minWidth: 56, textAlign: 'center' }}>
+                            {value}
+                        </div>
+                    ) : (
+                        <div style={{ padding: '6px 16px', border: '2px dashed #ddd', borderRadius: 8, color: '#bdc3c7', fontSize: '0.85rem' }}>–</div>
+                    )}
+                </div>
+            </div>
+            {value && (
+                <button type="button" onClick={() => onChange('')}
+                    style={{ marginTop: 8, background: 'none', border: 'none', color: '#e74c3c', cursor: 'pointer', fontSize: '0.8rem' }}>
+                    Limpiar grado
+                </button>
+            )}
+        </div>
+    );
+}
 
 const st = {
     containerCarga: { minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#f4f6f8', padding: 20 },

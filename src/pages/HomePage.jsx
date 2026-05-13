@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet';
 import L from 'leaflet';
-import { collection, getDocs, query, where } from 'firebase/firestore';
-import { Search, Plus, LogIn, LogOut, Layers } from 'lucide-react';
+import { collection, getDocs } from 'firebase/firestore';
+import { Search, Plus, LogIn, LogOut, Layers, Mountain } from 'lucide-react';
 import logo from '../assets/logotopoclimbing.png';
+import EscuelaModal from '../components/EscuelaModal';
 
 const CAPAS_MAPA = {
     callejero: {
@@ -29,10 +30,10 @@ L.Icon.Default.mergeOptions({
     shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
 });
 
-const iconoSector = new L.DivIcon({
+const iconoEscuela = new L.DivIcon({
     className: '',
-    html: `<div style="background:#e74c3c;color:white;padding:4px 8px;border-radius:12px;font-size:12px;font-weight:bold;white-space:nowrap;box-shadow:0 2px 8px rgba(0,0,0,0.3);border:2px solid white;">📍</div>`,
-    iconAnchor: [12, 12],
+    html: `<div style="background:#27ae60;color:white;padding:5px 9px;border-radius:12px;font-size:13px;font-weight:bold;white-space:nowrap;box-shadow:0 2px 8px rgba(0,0,0,0.35);border:2px solid white;">⛰️</div>`,
+    iconAnchor: [14, 14],
 });
 
 // Extrae lat/lng: primero coordenadas explícitas, luego parseo de mapsUrl
@@ -67,24 +68,29 @@ export default function HomePage({ onCrearCroquis, onVerCroquis }) {
     const [cargando, setCargando] = useState(true);
     const [sectorSeleccionado, setSectorSeleccionado] = useState(null);
     const [capaMapa, setCapaMapa] = useState('callejero');
+    const [escuelas, setEscuelas] = useState([]);
+    const [mostrarModalEscuela, setMostrarModalEscuela] = useState(false);
+    const [vistaActiva, setVistaActiva] = useState('croquis'); // 'croquis' | 'escuelas'
 
     const cargarCroquis = useCallback(async () => {
         setCargando(true);
         try {
-            const q = query(collection(db, 'croquis_escalada'), where('visibilidad', '==', 'publico'));
-            const snap = await getDocs(q);
-            // También cargar sin filtro para retrocompatibilidad (docs sin campo visibilidad)
             const snapAll = await getDocs(collection(db, 'croquis_escalada'));
             const todos = snapAll.docs.map(d => ({ id: d.id, ...d.data() }))
                 .filter(d => !d.visibilidad || d.visibilidad === 'publico');
             setCroquis(todos);
-        } catch (e) {
-            console.error(e);
-        }
+        } catch (e) { console.error(e); }
         setCargando(false);
     }, []);
 
-    useEffect(() => { cargarCroquis(); }, [cargarCroquis]);
+    const cargarEscuelas = useCallback(async () => {
+        try {
+            const snap = await getDocs(collection(db, 'escuelas'));
+            setEscuelas(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+        } catch (e) { console.error(e); }
+    }, []);
+
+    useEffect(() => { cargarCroquis(); cargarEscuelas(); }, [cargarCroquis, cargarEscuelas]);
 
     const croquisFiltrados = croquis.filter(c => {
         const texto = busqueda.toLowerCase();
@@ -130,6 +136,9 @@ export default function HomePage({ onCrearCroquis, onVerCroquis }) {
                     />
                 </div>
                 <div style={st.navAcciones}>
+                    <button onClick={() => setMostrarModalEscuela(true)} style={st.btnEscuela}>
+                        <Mountain size={18} /> Nueva escuela
+                    </button>
                     <button onClick={onCrearCroquis} style={st.btnCrear}>
                         <Plus size={18} /> Crear croquis
                     </button>
@@ -170,37 +179,64 @@ export default function HomePage({ onCrearCroquis, onVerCroquis }) {
                         url={CAPAS_MAPA[capaMapa].url}
                     />
                     {sectoresMapa.map((sector, i) => (
-                        <Marker key={i} position={[sector.coords.lat, sector.coords.lng]}>
+                        <Marker key={`s-${i}`} position={[sector.coords.lat, sector.coords.lng]}>
                             <Popup maxWidth={320} minWidth={260}>
                                 <PopupSector sector={sector} onVer={onVerCroquis} />
+                            </Popup>
+                        </Marker>
+                    ))}
+                    {escuelas.filter(e => e.lat && e.lng).map(e => (
+                        <Marker key={`e-${e.id}`} position={[e.lat, e.lng]} icon={iconoEscuela}>
+                            <Popup maxWidth={300} minWidth={240}>
+                                <PopupEscuela escuela={e} croquis={croquis} onCrearCroquis={onCrearCroquis} />
                             </Popup>
                         </Marker>
                     ))}
                 </MapContainer>
             </div>
 
-            {/* LISTA DE CROQUIS */}
+            {/* LISTA */}
             <div style={st.lista}>
-                <div style={st.listaHeader}>
-                    <h2 style={st.listaTitulo}>
-                        {busqueda ? `Resultados: "${busqueda}"` : 'Croquis públicos'}
-                        <span style={st.contadorBadge}>{croquisFiltrados.length}</span>
-                    </h2>
+                {/* Tabs */}
+                <div style={st.tabs}>
+                    <button onClick={() => setVistaActiva('croquis')} style={{ ...st.tab, ...(vistaActiva === 'croquis' ? st.tabActivo : {}) }}>
+                        Croquis <span style={st.contadorBadge}>{croquisFiltrados.length}</span>
+                    </button>
+                    <button onClick={() => setVistaActiva('escuelas')} style={{ ...st.tab, ...(vistaActiva === 'escuelas' ? st.tabActivo : {}) }}>
+                        Escuelas <span style={st.contadorBadge}>{escuelas.length}</span>
+                    </button>
                 </div>
-                {cargando ? (
-                    <div style={st.cargando}>Cargando croquis…</div>
-                ) : croquisFiltrados.length === 0 ? (
-                    <div style={st.sinResultados}>
-                        {busqueda ? 'No se encontraron sectores con ese nombre.' : 'No hay croquis públicos aún.'}
-                    </div>
-                ) : (
-                    <div style={st.grid}>
-                        {croquisFiltrados.map(c => (
-                            <TarjetaCroquis key={c.id} croquis={c} onVer={() => onVerCroquis(c)} />
-                        ))}
-                    </div>
+
+                {vistaActiva === 'croquis' && (
+                    cargando ? <div style={st.cargando}>Cargando…</div>
+                    : croquisFiltrados.length === 0
+                        ? <div style={st.sinResultados}>{busqueda ? 'No se encontraron sectores.' : 'No hay croquis públicos aún.'}</div>
+                        : <div style={st.grid}>{croquisFiltrados.map(c => <TarjetaCroquis key={c.id} croquis={c} onVer={() => onVerCroquis(c)} />)}</div>
+                )}
+
+                {vistaActiva === 'escuelas' && (
+                    escuelas.length === 0
+                        ? <div style={st.sinResultados}>No hay escuelas creadas aún. ¡Crea la primera con el botón "Nueva escuela"!</div>
+                        : <div style={st.grid}>
+                            {escuelas
+                                .filter(e => !busqueda || e.nombre?.toLowerCase().includes(busqueda.toLowerCase()))
+                                .map(e => (
+                                    <TarjetaEscuela key={e.id} escuela={e}
+                                        numSectores={croquis.filter(c => c.infoCroquis?.escuela?.toLowerCase() === e.nombre?.toLowerCase()).length}
+                                        onCrearCroquis={onCrearCroquis}
+                                    />
+                                ))
+                            }
+                        </div>
                 )}
             </div>
+
+            {mostrarModalEscuela && (
+                <EscuelaModal
+                    onClose={() => setMostrarModalEscuela(false)}
+                    onCreada={(nueva) => { setEscuelas(prev => [nueva, ...prev]); }}
+                />
+            )}
         </div>
     );
 }
@@ -252,6 +288,48 @@ function PopupSector({ sector, onVer }) {
     );
 }
 
+function PopupEscuela({ escuela, croquis, onCrearCroquis }) {
+    const sectores = croquis.filter(c => c.infoCroquis?.escuela?.toLowerCase() === escuela.nombre?.toLowerCase());
+    return (
+        <div style={{ fontFamily: "'Segoe UI', sans-serif", minWidth: 220 }}>
+            {escuela.imagenUrl && (
+                <img src={escuela.imagenUrl} alt={escuela.nombre}
+                    style={{ width: '100%', height: 110, objectFit: 'cover', borderRadius: 8, marginBottom: 8 }} />
+            )}
+            <div style={{ fontWeight: 'bold', fontSize: '1rem', color: '#2c3e50', marginBottom: 4 }}>⛰️ {escuela.nombre}</div>
+            {escuela.descripcion && <p style={{ fontSize: '0.82rem', color: '#555', margin: '0 0 8px' }}>{escuela.descripcion}</p>}
+            <div style={{ fontSize: '0.8rem', color: '#27ae60', fontWeight: 'bold', marginBottom: 8 }}>
+                {sectores.length} sector{sectores.length !== 1 ? 'es' : ''} con croquis
+            </div>
+            <button onClick={onCrearCroquis}
+                style={{ width: '100%', padding: '8px', background: '#27ae60', color: 'white', border: 'none', borderRadius: 8, fontWeight: 'bold', cursor: 'pointer', fontSize: '0.9rem' }}>
+                + Añadir sector
+            </button>
+        </div>
+    );
+}
+
+function TarjetaEscuela({ escuela, numSectores, onCrearCroquis }) {
+    return (
+        <div style={{ ...st.tarjeta, border: '2px solid #eafaf1' }}>
+            <div style={{ ...st.tarjetaImg, background: '#eafaf1' }}>
+                {escuela.imagenUrl
+                    ? <img src={escuela.imagenUrl} alt={escuela.nombre} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                    : <div style={st.tarjetaImgPlaceholder}>⛰️</div>}
+                <div style={{ ...st.tarjetaBadge, background: 'rgba(39,174,96,0.85)' }}>{numSectores} sector{numSectores !== 1 ? 'es' : ''}</div>
+            </div>
+            <div style={st.tarjetaInfo}>
+                <div style={{ ...st.tarjetaTitulo, color: '#27ae60' }}>{escuela.nombre}</div>
+                {escuela.descripcion && <div style={{ ...st.tarjetaEscuela, fontSize: '0.8rem' }}>{escuela.descripcion.slice(0, 80)}{escuela.descripcion.length > 80 ? '…' : ''}</div>}
+                <button onClick={onCrearCroquis}
+                    style={{ marginTop: 8, padding: '6px 12px', background: '#27ae60', color: 'white', border: 'none', borderRadius: 6, fontWeight: 'bold', cursor: 'pointer', fontSize: '0.8rem' }}>
+                    + Añadir sector
+                </button>
+            </div>
+        </div>
+    );
+}
+
 function InfoChip({ icon, label }) {
     return (
         <div style={{ background: '#f8f9fa', borderRadius: 6, padding: '4px 8px', fontSize: '0.78rem', color: '#555' }}>
@@ -290,7 +368,11 @@ const st = {
     navBuscador: { flex: 1, position: 'relative', minWidth: 200, maxWidth: 400 },
     inputBusqueda: { width: '100%', padding: '9px 14px 9px 38px', borderRadius: 25, border: 'none', fontSize: '0.95rem', outline: 'none', boxSizing: 'border-box', background: 'rgba(255,255,255,0.12)', color: 'white' },
     navAcciones: { display: 'flex', alignItems: 'center', gap: 10 },
+    btnEscuela: { display: 'flex', alignItems: 'center', gap: 6, padding: '9px 16px', background: 'rgba(39,174,96,0.2)', color: 'white', border: '1px solid rgba(39,174,96,0.6)', borderRadius: 8, fontWeight: 'bold', cursor: 'pointer', fontSize: '0.9rem' },
     btnCrear: { display: 'flex', alignItems: 'center', gap: 6, padding: '9px 18px', background: '#27ae60', color: 'white', border: 'none', borderRadius: 8, fontWeight: 'bold', cursor: 'pointer', fontSize: '0.9rem' },
+    tabs: { display: 'flex', gap: 8, marginBottom: 14 },
+    tab: { padding: '8px 18px', borderRadius: 20, border: '2px solid #ecf0f1', background: 'white', color: '#7f8c8d', fontWeight: 'bold', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8, fontSize: '0.9rem' },
+    tabActivo: { background: '#2c3e50', color: 'white', borderColor: '#2c3e50' },
     btnLogin: { display: 'flex', alignItems: 'center', gap: 6, padding: '9px 16px', background: 'rgba(255,255,255,0.15)', color: 'white', border: '1px solid rgba(255,255,255,0.3)', borderRadius: 8, fontWeight: 'bold', cursor: 'pointer', fontSize: '0.9rem' },
     btnSalir: { background: 'none', border: 'none', color: 'rgba(255,255,255,0.6)', cursor: 'pointer', padding: 4 },
     usuarioInfo: { display: 'flex', alignItems: 'center', gap: 8 },
