@@ -1,0 +1,8 @@
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: 'Segoe UI', Tahoma, sans-serif; }
+
+/* Leaflet map container needs explicit height */
+.leaflet-container { z-index: 1; }
+
+/* Input placeholder color in dark navbar */
+input::placeholder { color: rgba(255,255,255,0.45); }
