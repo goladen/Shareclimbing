@@ -1,10 +1,11 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet';
 import L from 'leaflet';
-import { collection, getDocs } from 'firebase/firestore';
+import { collection, getDocs, deleteDoc, doc } from 'firebase/firestore';
 import { Search, Plus, LogIn, LogOut, Layers, Mountain } from 'lucide-react';
 import logo from '../assets/logotopoclimbing.png';
 import EscuelaModal from '../components/EscuelaModal';
+import NotificacionesCampana from '../components/NotificacionesCampana';
 
 const CAPAS_MAPA = {
     callejero: {
@@ -70,6 +71,7 @@ export default function HomePage({ onCrearCroquis, onVerCroquis }) {
     const [capaMapa, setCapaMapa] = useState('callejero');
     const [escuelas, setEscuelas] = useState([]);
     const [mostrarModalEscuela, setMostrarModalEscuela] = useState(false);
+    const [escuelaEditando, setEscuelaEditando] = useState(null);
     const [vistaActiva, setVistaActiva] = useState('croquis'); // 'croquis' | 'escuelas'
 
     const cargarCroquis = useCallback(async () => {
@@ -92,6 +94,18 @@ export default function HomePage({ onCrearCroquis, onVerCroquis }) {
 
     useEffect(() => { cargarCroquis(); cargarEscuelas(); }, [cargarCroquis, cargarEscuelas]);
 
+    const eliminarCroquis = async (id) => {
+        if (!window.confirm('¿Eliminar este croquis? Esta acción no se puede deshacer.')) return;
+        await deleteDoc(doc(db, 'croquis_escalada', id));
+        setCroquis(prev => prev.filter(c => c.id !== id));
+    };
+
+    const eliminarEscuela = async (id) => {
+        if (!window.confirm('¿Eliminar esta escuela? Esta acción no se puede deshacer.')) return;
+        await deleteDoc(doc(db, 'escuelas', id));
+        setEscuelas(prev => prev.filter(e => e.id !== id));
+    };
+
     const croquisFiltrados = croquis.filter(c => {
         const texto = busqueda.toLowerCase();
         return !texto
@@ -101,9 +115,16 @@ export default function HomePage({ onCrearCroquis, onVerCroquis }) {
 
     const croquisConCoords = croquisFiltrados.filter(c => extraerCoordenadas(c.infoCroquis));
 
-    // Agrupar por sector para el mapa
+    // Escuelas con ubicación: sus sectores no muestran pin propio
+    const escuelasConUbicacion = new Set(
+        escuelas.filter(e => e.lat && e.lng).map(e => e.nombre?.toLowerCase().trim()).filter(Boolean)
+    );
+
+    // Agrupar por sector para el mapa — excluir sectores cuya escuela ya tiene marcador propio
     const sectoresMapa = Object.values(
-        croquisConCoords.reduce((acc, c) => {
+        croquisConCoords
+            .filter(c => !escuelasConUbicacion.has(c.infoCroquis?.escuela?.toLowerCase().trim()))
+            .reduce((acc, c) => {
             const key = `${c.infoCroquis?.escuela}__${c.infoCroquis?.sector}`;
             if (!acc[key]) {
                 acc[key] = {
@@ -144,6 +165,12 @@ export default function HomePage({ onCrearCroquis, onVerCroquis }) {
                     </button>
                     {usuario ? (
                         <div style={st.usuarioInfo}>
+                            <NotificacionesCampana
+                                onVerCroquis={(croquisId) => {
+                                    const c = croquis.find(x => x.id === croquisId);
+                                    if (c) onVerCroquis(c);
+                                }}
+                            />
                             <div style={st.avatarCircle}>{(usuario.displayName || usuario.email)[0].toUpperCase()}</div>
                             <span style={st.usuarioNombre}>{usuario.displayName || usuario.email}</span>
                             <button onClick={cerrarSesion} style={st.btnSalir} title="Cerrar sesión"><LogOut size={16} /></button>
@@ -211,7 +238,7 @@ export default function HomePage({ onCrearCroquis, onVerCroquis }) {
                     cargando ? <div style={st.cargando}>Cargando…</div>
                     : croquisFiltrados.length === 0
                         ? <div style={st.sinResultados}>{busqueda ? 'No se encontraron sectores.' : 'No hay croquis públicos aún.'}</div>
-                        : <div style={st.grid}>{croquisFiltrados.map(c => <TarjetaCroquis key={c.id} croquis={c} onVer={() => onVerCroquis(c)} />)}</div>
+                        : <div style={st.grid}>{croquisFiltrados.map(c => <TarjetaCroquis key={c.id} croquis={c} onVer={() => onVerCroquis(c)} onEliminar={() => eliminarCroquis(c.id)} usuario={usuario} />)}</div>
                 )}
 
                 {vistaActiva === 'escuelas' && (
@@ -224,6 +251,9 @@ export default function HomePage({ onCrearCroquis, onVerCroquis }) {
                                     <TarjetaEscuela key={e.id} escuela={e}
                                         numSectores={croquis.filter(c => c.infoCroquis?.escuela?.toLowerCase() === e.nombre?.toLowerCase()).length}
                                         onCrearCroquis={onCrearCroquis}
+                                        onEditar={() => setEscuelaEditando(e)}
+                                        onEliminar={() => eliminarEscuela(e.id)}
+                                        usuario={usuario}
                                     />
                                 ))
                             }
@@ -235,6 +265,16 @@ export default function HomePage({ onCrearCroquis, onVerCroquis }) {
                 <EscuelaModal
                     onClose={() => setMostrarModalEscuela(false)}
                     onCreada={(nueva) => { setEscuelas(prev => [nueva, ...prev]); }}
+                />
+            )}
+            {escuelaEditando && (
+                <EscuelaModal
+                    escuelaEditar={escuelaEditando}
+                    onClose={() => setEscuelaEditando(null)}
+                    onEditada={(actualizada) => {
+                        setEscuelas(prev => prev.map(e => e.id === actualizada.id ? actualizada : e));
+                        setEscuelaEditando(null);
+                    }}
                 />
             )}
         </div>
@@ -309,14 +349,21 @@ function PopupEscuela({ escuela, croquis, onCrearCroquis }) {
     );
 }
 
-function TarjetaEscuela({ escuela, numSectores, onCrearCroquis }) {
+function TarjetaEscuela({ escuela, numSectores, onCrearCroquis, onEditar, onEliminar, usuario }) {
+    const esMio = usuario?.uid === escuela.creadoPor;
     return (
         <div style={{ ...st.tarjeta, border: '2px solid #eafaf1' }}>
-            <div style={{ ...st.tarjetaImg, background: '#eafaf1' }}>
+            <div style={{ ...st.tarjetaImg, background: '#eafaf1', position: 'relative' }}>
                 {escuela.imagenUrl
                     ? <img src={escuela.imagenUrl} alt={escuela.nombre} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
                     : <div style={st.tarjetaImgPlaceholder}>⛰️</div>}
                 <div style={{ ...st.tarjetaBadge, background: 'rgba(39,174,96,0.85)' }}>{numSectores} sector{numSectores !== 1 ? 'es' : ''}</div>
+                {esMio && (
+                    <div style={{ position: 'absolute', top: 8, left: 8, display: 'flex', gap: 4 }}>
+                        <button onClick={e => { e.stopPropagation(); onEditar(); }} style={st.btnEliminarTarjeta} title="Editar escuela">✏️</button>
+                        <button onClick={e => { e.stopPropagation(); onEliminar(); }} style={st.btnEliminarTarjeta} title="Eliminar escuela">🗑️</button>
+                    </div>
+                )}
             </div>
             <div style={st.tarjetaInfo}>
                 <div style={{ ...st.tarjetaTitulo, color: '#27ae60' }}>{escuela.nombre}</div>
@@ -338,17 +385,24 @@ function InfoChip({ icon, label }) {
     );
 }
 
-function TarjetaCroquis({ croquis, onVer }) {
+function TarjetaCroquis({ croquis, onVer, onEliminar, usuario }) {
     const info = croquis.infoCroquis || {};
+    const esMio = usuario?.uid === croquis.creadoPor;
     return (
-        <div style={st.tarjeta} onClick={onVer}>
-            <div style={st.tarjetaImg}>
+        <div style={{ ...st.tarjeta, position: 'relative' }}>
+            <div style={st.tarjetaImg} onClick={onVer}>
                 {croquis.imagenUrl
                     ? <img src={croquis.imagenUrl} alt={info.sector} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
                     : <div style={st.tarjetaImgPlaceholder}>🏔️</div>}
                 <div style={st.tarjetaBadge}>{croquis.vias?.length || 0} vías</div>
+                {esMio && (
+                    <button
+                        onClick={e => { e.stopPropagation(); onEliminar(); }}
+                        style={st.btnEliminarTarjeta} title="Eliminar croquis"
+                    >🗑️</button>
+                )}
             </div>
-            <div style={st.tarjetaInfo}>
+            <div style={st.tarjetaInfo} onClick={onVer}>
                 <div style={st.tarjetaTitulo}>{info.sector || 'Sin nombre'}</div>
                 {info.escuela && <div style={st.tarjetaEscuela}>{info.escuela}</div>}
                 <div style={st.tarjetaMeta}>
@@ -390,6 +444,7 @@ const st = {
     tarjetaImg: { height: 140, background: '#ecf0f1', position: 'relative', overflow: 'hidden' },
     tarjetaImgPlaceholder: { display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', fontSize: 48 },
     tarjetaBadge: { position: 'absolute', top: 8, right: 8, background: 'rgba(0,0,0,0.55)', color: 'white', borderRadius: 12, padding: '3px 10px', fontSize: '0.78rem', fontWeight: 'bold' },
+    btnEliminarTarjeta: { background: 'rgba(0,0,0,0.55)', border: 'none', borderRadius: 6, padding: '4px 7px', cursor: 'pointer', fontSize: '0.85rem', lineHeight: 1 },
     tarjetaInfo: { padding: '12px 14px' },
     tarjetaTitulo: { fontWeight: 'bold', fontSize: '1rem', color: '#2c3e50', marginBottom: 3 },
     tarjetaEscuela: { color: '#7f8c8d', fontSize: '0.82rem', marginBottom: 6 },

@@ -1,4 +1,24 @@
-// Límites de imagen para Firebase Storage
+const CLOUDINARY_CLOUD = 'dsr6yuf4y';
+const CLOUDINARY_PRESET = 'TopoClimbing';
+
+export async function subirACloudinary(blob, onProgreso) {
+    onProgreso?.('Subiendo imagen…');
+    const form = new FormData();
+    form.append('file', blob);
+    form.append('upload_preset', CLOUDINARY_PRESET);
+    const res = await fetch(`https://api.cloudinary.com/v1_1/${CLOUDINARY_CLOUD}/image/upload`, {
+        method: 'POST',
+        body: form,
+    });
+    if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error?.message || 'Error al subir imagen');
+    }
+    const data = await res.json();
+    return data.secure_url;
+}
+
+// Límites de imagen
 export const MAX_MB = 20;           // rechazar si supera esto
 export const COMPRIMIR_SI_MB = 2;   // comprimir automáticamente si supera esto
 export const MAX_DIMENSION = 2048;  // píxeles máximos por lado

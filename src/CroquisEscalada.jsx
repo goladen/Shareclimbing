@@ -3,14 +3,14 @@ import {
     Camera, Link as LinkIcon, Plus, MapPin,
     Type, Edit, Info, CheckCircle, Move, ZoomIn, ZoomOut,
     X, ArrowLeft, Image as ImageIcon, MousePointer2, Save,
-    Globe, Lock, Layers
+    Globe, Lock, Layers, Square, Circle, AlignLeft, Printer
 } from 'lucide-react';
-import { db, auth, storage } from './firebase';
+import ModalImpresion from './components/ModalImpresion';
+import { db, auth } from './firebase';
 import { collection, doc, addDoc, updateDoc, getDocs, getDoc, serverTimestamp, arrayUnion } from 'firebase/firestore';
-import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { useAuth } from './contexts/AuthContext';
 import LocationPicker from './components/LocationPicker';
-import { procesarImagenParaSubir, formatearMB, MAX_MB } from './utils/imagen';
+import { procesarImagenParaSubir, subirACloudinary, formatearMB, MAX_MB } from './utils/imagen';
 
 const COLORES = ['#e74c3c', '#3498db', '#2ecc71', '#f1c40f', '#9b59b6', '#e67e22', '#1abc9c', '#e84393'];
 
@@ -41,11 +41,29 @@ const INFO_CROQUIS_INIT = {
 export default function CroquisEscalada({ onExit, croquisInicial }) {
     const { usuario, pedirAuth } = useAuth();
 
-    const [imagenUrl, setImagenUrl] = useState(croquisInicial?.imagenUrl || null);
-    const [imagenEsArchivo, setImagenEsArchivo] = useState(false);
-    const [imagenFile, setImagenFile] = useState(null); // File original para compresión
+    // ─── MULTI-FOTO (varias fotos por sector) ───
+    const [fotos, setFotos] = useState(() => {
+        if (croquisInicial?.fotos?.length > 0) {
+            return croquisInicial.fotos.map(f => ({ ...f, imagenEsArchivo: false, imagenFile: null }));
+        }
+        return [{ id: 'f0', imagenUrl: croquisInicial?.imagenUrl || null, imagenEsArchivo: false, imagenFile: null, vias: croquisInicial?.vias || [], formas: croquisInicial?.formas || [] }];
+    });
+    const [fotoIdx, setFotoIdx] = useState(0);
+
+    // Valores derivados de la foto activa
+    const foto = fotos[fotoIdx] || { imagenUrl: null, imagenEsArchivo: false, imagenFile: null, vias: [], formas: [] };
+    const imagenUrl = foto.imagenUrl;
+    const imagenEsArchivo = foto.imagenEsArchivo;
+    const imagenFile = foto.imagenFile;
+    const vias = foto.vias || [];
+
+    // Setters que actualizan solo la foto activa
+    const setImagenUrl = (v) => setFotos(fs => fs.map((f, i) => i === fotoIdx ? { ...f, imagenUrl: v } : f));
+    const setImagenEsArchivo = (v) => setFotos(fs => fs.map((f, i) => i === fotoIdx ? { ...f, imagenEsArchivo: v } : f));
+    const setImagenFile = (v) => setFotos(fs => fs.map((f, i) => i === fotoIdx ? { ...f, imagenFile: v } : f));
+    const setVias = (fn) => setFotos(fs => fs.map((f, i) => i === fotoIdx ? { ...f, vias: typeof fn === 'function' ? fn(f.vias || []) : fn } : f));
+
     const [imgSize, setImgSize] = useState({ w: 800, h: 600 });
-    const [vias, setVias] = useState(croquisInicial?.vias || []);
     const [visibilidad, setVisibilidad] = useState(croquisInicial?.visibilidad || 'publico');
 
     // Detectar si editamos un croquis ajeno
@@ -84,22 +102,46 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
     const [mostrarCapas, setMostrarCapas] = useState(false);
     const [capas, setCapas] = useState(croquisInicial?.capas || []);
 
+    // Formas (rectángulo, elipse, texto libre) — derivadas de la foto activa
+    const formas = foto.formas || [];
+    const setFormas = (fn) => setFotos(fs => fs.map((f, i) => i === fotoIdx ? { ...f, formas: typeof fn === 'function' ? fn(f.formas || []) : fn } : f));
+
+    const [herramientaForma, setHerramientaForma] = useState(null); // 'RECT' | 'ELIPSE' | 'TEXTO_LIBRE'
+    const [dibujando, setDibujando] = useState(null); // {x,y,w,h}
+    const dibujandoStart = useRef(null);
+    const [colorForma, setColorForma] = useState('#e74c3c');
+    const [grosorForma, setGrosorForma] = useState(2);
+
+    // Texto libre en posición
+    const [textoLibrePos, setTextoLibrePos] = useState(null);
+    const [textoLibreValor, setTextoLibreValor] = useState('');
+
+    // Texto de via (reemplaza prompt())
+    const [textoModalPos, setTextoModalPos] = useState(null);
+    const [textoModalValor, setTextoModalValor] = useState('');
+
+    // Editar info de via existente
+    const [editandoInfoViaIdx, setEditandoInfoViaIdx] = useState(null);
+
+    // Impresión
+    const [mostrarImpresion, setMostrarImpresion] = useState(false);
+
     const contenedorRef = useRef(null);
 
-    // Inicializar scale/pan cuando hay imagen desde croquisInicial
+    // Actualizar escala/pan al cambiar de foto
     useEffect(() => {
-        if (imagenUrl && croquisInicial?.imagenUrl) {
-            const img = new Image();
-            img.onload = () => {
-                setImgSize({ w: img.width, h: img.height });
-                const wScale = window.innerWidth / img.width;
-                const hScale = (window.innerHeight - 200) / img.height;
-                setScale(Math.min(wScale, hScale, 1) * 0.9);
-                setPan({ x: 50, y: 50 });
-            };
-            img.src = imagenUrl;
-        }
-    }, []);
+        const url = fotos[fotoIdx]?.imagenUrl;
+        if (!url) { setImgSize({ w: 800, h: 600 }); return; }
+        const img = new Image();
+        img.onload = () => {
+            setImgSize({ w: img.width, h: img.height });
+            const wScale = window.innerWidth / img.width;
+            const hScale = (window.innerHeight - 200) / img.height;
+            setScale(Math.min(wScale, hScale, 1) * 0.9);
+            setPan({ x: 50, y: 50 });
+        };
+        img.src = url;
+    }, [fotoIdx]); // eslint-disable-line
 
     const cargarSugerencias = async () => {
         try {
@@ -155,57 +197,47 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
         if (url) { procesarImagen(url); setImagenEsArchivo(false); }
     };
 
-    // ─── FIREBASE: guardar croquis propio ───
+    // ─── FIREBASE: guardar croquis propio (multi-foto) ───
     const ejecutarGuardado = async () => {
         setGuardando(true);
         try {
-            let urlFinal = imagenEsArchivo ? null : imagenUrl;
-
-            if (imagenEsArchivo && imagenUrl) {
-                // Comprimir si hace falta antes de subir
-                const fileParaSubir = imagenFile || (() => {
-                    // Fallback: convertir dataURL a File
-                    const arr = imagenUrl.split(',');
-                    const mime = arr[0].match(/:(.*?);/)[1];
-                    const bstr = atob(arr[1]);
-                    const u8arr = new Uint8Array(bstr.length);
-                    for (let i = 0; i < bstr.length; i++) u8arr[i] = bstr.charCodeAt(i);
-                    return new File([u8arr], 'croquis.jpg', { type: mime });
-                })();
-
-                const resultado = await procesarImagenParaSubir(fileParaSubir, setProgresoSubida);
-
-                if (resultado.error) {
-                    alert(resultado.error);
-                    setGuardando(false);
-                    setProgresoSubida('');
-                    return;
+            // Subir fotos locales a Cloudinary
+            const fotasGuardadas = [];
+            const fotosActuales = [...fotos]; // snapshot
+            for (let i = 0; i < fotosActuales.length; i++) {
+                const f = fotosActuales[i];
+                if (!f.imagenUrl) continue;
+                let urlFinal = f.imagenEsArchivo ? null : f.imagenUrl;
+                if (f.imagenEsArchivo && f.imagenUrl) {
+                    setProgresoSubida(`Subiendo foto ${i + 1} de ${fotosActuales.length}…`);
+                    const fileParaSubir = f.imagenFile || (() => {
+                        const arr = f.imagenUrl.split(',');
+                        const mime = arr[0].match(/:(.*?);/)[1];
+                        const bstr = atob(arr[1]);
+                        const u8arr = new Uint8Array(bstr.length);
+                        for (let j = 0; j < bstr.length; j++) u8arr[j] = bstr.charCodeAt(j);
+                        return new File([u8arr], 'croquis.jpg', { type: mime });
+                    })();
+                    const resultado = await procesarImagenParaSubir(fileParaSubir, setProgresoSubida);
+                    if (resultado.error) { alert(resultado.error); setGuardando(false); setProgresoSubida(''); return; }
+                    urlFinal = await subirACloudinary(resultado.blob, setProgresoSubida);
+                    setFotos(prev => prev.map((pf, pi) => pi === i ? { ...pf, imagenUrl: urlFinal, imagenEsArchivo: false, imagenFile: null } : pf));
                 }
-
-                if (resultado.comprimida) {
-                    setProgresoSubida(`Subiendo imagen (${formatearMB(resultado.blob.size)}, comprimida de ${resultado.originalMB.toFixed(1)} MB)…`);
-                } else {
-                    setProgresoSubida('Subiendo imagen…');
-                }
-
-                const uid = auth.currentUser?.uid || 'anonimo';
-                const storageRef = ref(storage, `croquis/${uid}/${Date.now()}.jpg`);
-                await uploadBytes(storageRef, resultado.blob);
-                urlFinal = await getDownloadURL(storageRef);
-                setImagenEsArchivo(false);
-                setImagenFile(null);
-                setImagenUrl(urlFinal);
-                setProgresoSubida('');
+                fotasGuardadas.push({
+                    id: f.id || `f${i}`,
+                    imagenUrl: urlFinal,
+                    vias: (f.vias || []).map(v => ({ id: v.id, inicio: v.inicio, fin: v.fin, intermedios: v.intermedios, textos: v.textos, info: v.info, color: v.color, grosor: v.grosor || 4 })),
+                    formas: f.formas || []
+                });
             }
+            setProgresoSubida('');
 
             const data = {
                 infoCroquis,
-                imagenUrl: urlFinal,
-                vias: vias.map(v => ({
-                    id: v.id, inicio: v.inicio, fin: v.fin,
-                    intermedios: v.intermedios, textos: v.textos,
-                    info: v.info, color: v.color
-                })),
+                fotos: fotasGuardadas,
+                imagenUrl: fotasGuardadas[0]?.imagenUrl || null,
+                vias: fotasGuardadas[0]?.vias || [],
+                formas: fotasGuardadas[0]?.formas || [],
                 visibilidad,
                 creadoPor: auth.currentUser?.uid || 'anonimo',
                 updatedAt: serverTimestamp()
@@ -218,6 +250,23 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
                 data.capas = [];
                 const docRef = await addDoc(collection(db, 'croquis_escalada'), data);
                 croquísId.current = docRef.id;
+
+                // Auto-crear escuela si el nombre no existe
+                const escuelaNombre = infoCroquis.escuela?.trim();
+                if (escuelaNombre && auth.currentUser) {
+                    const escSnap = await getDocs(collection(db, 'escuelas'));
+                    const existe = escSnap.docs.some(d => d.data().nombre?.toLowerCase() === escuelaNombre.toLowerCase());
+                    if (!existe) {
+                        await addDoc(collection(db, 'escuelas'), {
+                            nombre: escuelaNombre,
+                            descripcion: '',
+                            lat: infoCroquis.lat ? parseFloat(infoCroquis.lat) : null,
+                            lng: infoCroquis.lng ? parseFloat(infoCroquis.lng) : null,
+                            creadoPor: auth.currentUser.uid,
+                            createdAt: serverTimestamp(),
+                        });
+                    }
+                }
             }
             alert('Croquis guardado');
         } catch (e) {
@@ -268,6 +317,27 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
         await updateDoc(doc(db, 'croquis_escalada', croquísId.current), { capas: nuevasCapas });
     };
 
+    // ─── NAVEGACIÓN ENTRE FOTOS ───
+    const cambiarFoto = (newIdx) => {
+        if (creando) { setCreando(false); setHerramienta('PAN'); }
+        setEditandoViaIdx(null);
+        setEditandoInfoViaIdx(null);
+        setFotoIdx(newIdx);
+    };
+
+    const agregarFoto = () => {
+        const nuevaId = `f${Date.now()}`;
+        setFotos(prev => [...prev, { id: nuevaId, imagenUrl: null, imagenEsArchivo: false, imagenFile: null, vias: [], formas: [] }]);
+        cambiarFoto(fotos.length); // navegar a la nueva (índice = longitud actual antes de añadir)
+    };
+
+    const eliminarFotoActual = () => {
+        if (fotos.length === 1) { alert('Debe haber al menos una foto.'); return; }
+        if (!window.confirm('¿Eliminar esta foto y sus vías?')) return;
+        setFotos(prev => prev.filter((_, i) => i !== fotoIdx));
+        setFotoIdx(prev => Math.max(0, prev - 1));
+    };
+
     // ─── GUARDAR (decide flujo según contexto) ───
     const guardarEnFirebase = () => {
         if (!usuario) {
@@ -295,6 +365,21 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
 
     const handlePointerDown = (e) => {
         if (editandoViaIdx !== null) return;
+
+        // Herramientas de forma
+        if (herramientaForma === 'TEXTO_LIBRE') {
+            const { x, y } = screenToSvg(e.clientX, e.clientY);
+            setTextoLibrePos({ x, y });
+            setTextoLibreValor('');
+            return;
+        }
+        if (herramientaForma === 'RECT' || herramientaForma === 'ELIPSE') {
+            const { x, y } = screenToSvg(e.clientX, e.clientY);
+            dibujandoStart.current = { x, y };
+            setDibujando({ x, y, w: 0, h: 0 });
+            return;
+        }
+
         if (!creando || herramienta === 'PAN') {
             setIsDragging(true);
             setDragStart({ x: e.clientX - pan.x, y: e.clientY - pan.y });
@@ -305,10 +390,28 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
     };
 
     const handlePointerMove = (e) => {
+        if (dibujando && dibujandoStart.current) {
+            const { x, y } = screenToSvg(e.clientX, e.clientY);
+            const sx = dibujandoStart.current.x;
+            const sy = dibujandoStart.current.y;
+            setDibujando({ x: Math.min(sx, x), y: Math.min(sy, y), w: Math.abs(x - sx), h: Math.abs(y - sy) });
+            return;
+        }
         if (isDragging) setPan({ x: e.clientX - dragStart.x, y: e.clientY - dragStart.y });
     };
 
-    const handlePointerUp = () => setIsDragging(false);
+    const handlePointerUp = () => {
+        if (dibujando && dibujandoStart.current && (dibujando.w > 4 || dibujando.h > 4)) {
+            setFormas(prev => [...prev, {
+                id: Date.now(), tipo: herramientaForma,
+                x: dibujando.x, y: dibujando.y, w: dibujando.w, h: dibujando.h,
+                color: colorForma, grosor: grosorForma
+            }]);
+        }
+        setDibujando(null);
+        dibujandoStart.current = null;
+        setIsDragging(false);
+    };
 
     // ─── HERRAMIENTAS DE CREACIÓN ───
     const aplicarHerramienta = (x, y) => {
@@ -319,11 +422,11 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
         } else if (herramienta === 'INTERMEDIO') {
             setViaActual(prev => ({ ...prev, intermedios: [...prev.intermedios, { x, y }] }));
         } else if (herramienta === 'GRADO') {
-            setGradoTemp('');
+            setGradoTemp(viaActual.info.grado || '');
             setModalGradoPos({ x, y });
         } else if (herramienta === 'TEXTO') {
-            const txt = prompt('Introduce el texto:');
-            if (txt) setViaActual(prev => ({ ...prev, textos: [...prev.textos, { text: txt, x, y, type: 'texto' }] }));
+            setTextoModalPos({ x, y });
+            setTextoModalValor('');
         }
     };
 
@@ -377,14 +480,18 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
         if (editandoViaIdx === idx) setEditandoViaIdx(null);
     };
 
-    // ─── RENDER: PANTALLA DE CARGA ───
+    // ─── RENDER: PANTALLA DE CARGA (foto vacía) ───
     if (!imagenUrl) {
         return (
             <div style={st.containerCarga}>
                 <div style={st.cardCarga}>
                     <ImageIcon size={60} color="#3498db" style={{ marginBottom: 20 }} />
-                    <h1 style={{ color: '#2c3e50', margin: '0 0 10px' }}>Generador de Croquis</h1>
-                    <p style={{ color: '#7f8c8d', marginBottom: 30 }}>Añade una foto del sector para empezar.</p>
+                    <h1 style={{ color: '#2c3e50', margin: '0 0 6px' }}>
+                        {fotos.length > 1 ? `Foto ${fotoIdx + 1} de ${fotos.length}` : 'Generador de Croquis'}
+                    </h1>
+                    <p style={{ color: '#7f8c8d', marginBottom: 24 }}>
+                        {fotos.length > 1 ? 'Esta foto está vacía. Añade una imagen.' : 'Añade una foto del sector para empezar.'}
+                    </p>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 15 }}>
                         <label style={st.btnCarga}>
                             <Camera size={20} /> Hacer Foto / Galería
@@ -394,8 +501,16 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
                             <LinkIcon size={20} /> Cargar desde URL Pública
                         </button>
                     </div>
+                    {fotos.length > 1 && (
+                        <div style={{ display: 'flex', gap: 12, marginTop: 20, justifyContent: 'center' }}>
+                            <button onClick={() => cambiarFoto(fotoIdx - 1)} disabled={fotoIdx === 0}
+                                style={{ padding: '8px 20px', borderRadius: 8, border: '2px solid #bdc3c7', background: 'white', cursor: 'pointer', fontWeight: 'bold' }}>◀ Anterior</button>
+                            <button onClick={() => cambiarFoto(fotoIdx + 1)} disabled={fotoIdx === fotos.length - 1}
+                                style={{ padding: '8px 20px', borderRadius: 8, border: '2px solid #bdc3c7', background: 'white', cursor: 'pointer', fontWeight: 'bold' }}>Siguiente ▶</button>
+                        </div>
+                    )}
                     {onExit && (
-                        <button onClick={onExit} style={{ marginTop: 30, background: 'none', border: 'none', color: '#95a5a6', cursor: 'pointer', fontWeight: 'bold' }}>
+                        <button onClick={onExit} style={{ marginTop: 20, background: 'none', border: 'none', color: '#95a5a6', cursor: 'pointer', fontWeight: 'bold' }}>
                             Cancelar y volver
                         </button>
                     )}
@@ -434,6 +549,31 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
                 <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
                     <button onClick={() => setScale(s => s * 1.2)} style={st.btnIcono}><ZoomIn size={18} /></button>
                     <button onClick={() => setScale(s => s * 0.8)} style={st.btnIcono}><ZoomOut size={18} /></button>
+                    <button onClick={() => setMostrarImpresion(true)} style={st.btnIcono} title="Imprimir / Exportar PNG">
+                        <Printer size={18} />
+                    </button>
+                    <div style={st.divider} />
+
+                    {/* Navegación multi-foto */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 4, background: 'rgba(255,255,255,0.1)', borderRadius: 8, padding: '4px 8px' }}>
+                        <button onClick={() => cambiarFoto(fotoIdx - 1)} disabled={fotoIdx === 0}
+                            style={{ ...st.btnIcono, padding: '4px 8px', opacity: fotoIdx === 0 ? 0.4 : 1 }}>◀</button>
+                        <span style={{ color: 'white', fontSize: '0.82rem', fontWeight: 'bold', whiteSpace: 'nowrap' }}>
+                            Foto {fotoIdx + 1}/{fotos.length}
+                        </span>
+                        <button onClick={() => cambiarFoto(fotoIdx + 1)} disabled={fotoIdx === fotos.length - 1}
+                            style={{ ...st.btnIcono, padding: '4px 8px', opacity: fotoIdx === fotos.length - 1 ? 0.4 : 1 }}>▶</button>
+                        <button onClick={agregarFoto} title="Añadir otra foto"
+                            style={{ ...st.btnIcono, background: 'rgba(46,204,113,0.5)', padding: '4px 10px', fontSize: '0.8rem' }}>
+                            <Plus size={14} /> Foto
+                        </button>
+                        {fotos.length > 1 && (
+                            <button onClick={eliminarFotoActual} title="Eliminar esta foto"
+                                style={{ ...st.btnIcono, background: 'rgba(231,76,60,0.4)', padding: '4px 8px' }}>
+                                <X size={14} />
+                            </button>
+                        )}
+                    </div>
                     <div style={st.divider} />
 
                     {/* Visibilidad — solo si es croquis propio */}
@@ -539,6 +679,46 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
                 </div>
             )}
 
+            {/* BARRA HERRAMIENTAS DE FORMAS (siempre visible) */}
+            {!creando && editandoViaIdx === null && (
+                <div style={{ ...st.toolsBar, background: '#f0f4f8', padding: '8px 16px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                        <span style={{ fontSize: '0.78rem', fontWeight: 'bold', color: '#7f8c8d' }}>Anotaciones:</span>
+                        {[
+                            { h: 'RECT', icon: <Square size={15} />, label: 'Rect.' },
+                            { h: 'ELIPSE', icon: <Circle size={15} />, label: 'Elipse' },
+                            { h: 'TEXTO_LIBRE', icon: <AlignLeft size={15} />, label: 'Texto' },
+                        ].map(({ h, icon, label }) => (
+                            <button key={h}
+                                onClick={() => setHerramientaForma(prev => prev === h ? null : h)}
+                                style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '6px 11px', borderRadius: 7, fontWeight: 'bold', fontSize: '0.82rem', cursor: 'pointer', background: herramientaForma === h ? '#2c3e50' : 'white', color: herramientaForma === h ? 'white' : '#2c3e50', border: '2px solid #2c3e50' }}>
+                                {icon} {label}
+                            </button>
+                        ))}
+                        <div style={{ width: 1, height: 24, background: '#bdc3c7', margin: '0 4px' }} />
+                        <span style={{ fontSize: '0.78rem', fontWeight: 'bold', color: '#7f8c8d' }}>Color:</span>
+                        {['#e74c3c','#3498db','#2ecc71','#f1c40f','#9b59b6','#2c3e50'].map(c => (
+                            <div key={c} onClick={() => setColorForma(c)}
+                                style={{ width: 20, height: 20, borderRadius: '50%', background: c, cursor: 'pointer', border: colorForma === c ? '3px solid #2c3e50' : '2px solid white', boxShadow: '0 1px 3px rgba(0,0,0,0.2)', transform: colorForma === c ? 'scale(1.25)' : 'scale(1)' }} />
+                        ))}
+                        <input type="range" min="1" max="8" value={grosorForma}
+                            onChange={e => setGrosorForma(parseInt(e.target.value))}
+                            style={{ width: 70, accentColor: colorForma }} title={`Grosor: ${grosorForma}`} />
+                        {formas.length > 0 && (
+                            <button onClick={() => setFormas(prev => prev.slice(0, -1))}
+                                style={{ padding: '5px 10px', borderRadius: 6, border: '1px solid #e74c3c', color: '#e74c3c', background: 'white', cursor: 'pointer', fontSize: '0.78rem' }}>
+                                ↩ Deshacer última
+                            </button>
+                        )}
+                        {herramientaForma && (
+                            <span style={{ fontSize: '0.82rem', color: '#e74c3c', fontWeight: 'bold' }}>
+                                Clic y arrastra sobre la imagen ({herramientaForma === 'TEXTO_LIBRE' ? 'clic para texto' : herramientaForma.toLowerCase()})
+                            </span>
+                        )}
+                    </div>
+                </div>
+            )}
+
             {/* BARRA HERRAMIENTAS (editando) */}
             {editandoViaIdx !== null && (
                 <div style={{ ...st.toolsBar, background: '#fff3cd', padding: '10px 20px' }}>
@@ -589,7 +769,7 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
 
                     <svg
                         width={imgSize.w} height={imgSize.h}
-                        style={{ position: 'absolute', top: 0, left: 0, pointerEvents: (editandoViaIdx !== null || creando) ? 'all' : 'none' }}
+                        style={{ position: 'absolute', top: 0, left: 0, pointerEvents: (editandoViaIdx !== null || creando || herramientaForma) ? 'all' : 'none' }}
                     >
                         {vias.map((via, idx) => {
                             const dir = via.inicio && via.fin ? via.fin.y - via.inicio.y : -1;
@@ -600,7 +780,23 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
                                 <g key={via.id}>
                                     <path d={generarCurvaSuave(pts)} fill="none" stroke="black" strokeWidth={(via.grosor || 4) + 2} opacity="0.4" />
                                     <path d={generarCurvaSuave(pts)} fill="none" stroke={via.color} strokeWidth={via.grosor || 4} strokeLinecap="round" strokeLinejoin="round" />
-                                    {via.textos.map((txt, i) => <TextoSvg key={i} txt={txt} color={via.color} />)}
+                                    {via.textos.map((txt, tIdx) => isEditing
+                                ? <TextoEditable key={tIdx} txt={txt} color={via.color}
+                                    onMove={(nx, ny) => setVias(prev => {
+                                        const c = [...prev];
+                                        const textos = [...c[idx].textos];
+                                        textos[tIdx] = { ...textos[tIdx], x: nx, y: ny };
+                                        c[idx] = { ...c[idx], textos };
+                                        return c;
+                                    })}
+                                    onDelete={() => setVias(prev => {
+                                        const c = [...prev];
+                                        c[idx] = { ...c[idx], textos: c[idx].textos.filter((_, i) => i !== tIdx) };
+                                        return c;
+                                    })}
+                                    contenedorRef={contenedorRef} pan={pan} scale={scale} />
+                                : <TextoSvg key={tIdx} txt={txt} color={via.color} />
+                            )}
                                     {via.inicio && (
                                         <>
                                             <circle cx={via.inicio.x} cy={via.inicio.y + 20} r="15" fill={via.color} />
@@ -640,10 +836,44 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
                             );
                         })}
 
+                        {/* Formas (rect, elipse, texto libre) */}
+                        {formas.map(f => (
+                            <g key={f.id}>
+                                {f.tipo === 'RECT' && <rect x={f.x} y={f.y} width={f.w} height={f.h} fill="none" stroke={f.color} strokeWidth={f.grosor} />}
+                                {f.tipo === 'ELIPSE' && <ellipse cx={f.x + f.w/2} cy={f.y + f.h/2} rx={f.w/2} ry={f.h/2} fill="none" stroke={f.color} strokeWidth={f.grosor} />}
+                                {f.tipo === 'TEXTO_LIBRE' && (
+                                    <text x={f.x} y={f.y} fill={f.color} fontSize={f.fontSize || 20} fontWeight="bold"
+                                        stroke="black" strokeWidth="2" paintOrder="stroke">{f.text}</text>
+                                )}
+                            </g>
+                        ))}
+
+                        {/* Preview forma en curso */}
+                        {dibujando && herramientaForma === 'RECT' && (
+                            <rect x={dibujando.x} y={dibujando.y} width={dibujando.w} height={dibujando.h}
+                                fill="none" stroke={colorForma} strokeWidth={grosorForma} strokeDasharray="6,3" />
+                        )}
+                        {dibujando && herramientaForma === 'ELIPSE' && (
+                            <ellipse cx={dibujando.x + dibujando.w/2} cy={dibujando.y + dibujando.h/2}
+                                rx={dibujando.w/2} ry={dibujando.h/2}
+                                fill="none" stroke={colorForma} strokeWidth={grosorForma} strokeDasharray="6,3" />
+                        )}
+
                         {creando && (
                             <g>
                                 <path d={generarCurvaSuave(puntosViaActual)} fill="none" stroke={viaActual.color} strokeWidth={viaActual.grosor || 4} strokeDasharray="8,8" />
-                                {viaActual.textos.map((txt, i) => <TextoSvg key={i} txt={txt} color={viaActual.color} />)}
+                                {viaActual.textos.map((txt, tIdx) => (
+                                    <TextoEditable key={tIdx} txt={txt} color={viaActual.color}
+                                        onMove={(nx, ny) => setViaActual(prev => {
+                                            const textos = [...prev.textos];
+                                            textos[tIdx] = { ...textos[tIdx], x: nx, y: ny };
+                                            return { ...prev, textos };
+                                        })}
+                                        onDelete={() => setViaActual(prev => ({
+                                            ...prev, textos: prev.textos.filter((_, i) => i !== tIdx)
+                                        }))}
+                                        contenedorRef={contenedorRef} pan={pan} scale={scale} />
+                                ))}
                                 {viaActual.inicio && (
                                     <PuntoEditable
                                         x={viaActual.inicio.x} y={viaActual.inicio.y} color="#e74c3c"
@@ -715,6 +945,7 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
                                         <td style={st.td}><div style={{ width: 20, height: 20, borderRadius: '50%', background: v.color }} /></td>
                                         <td style={st.td}>
                                             <div style={{ display: 'flex', gap: 6 }}>
+                                                <button onClick={() => { setEditandoInfoViaIdx(i); }} style={st.btnAccion} title="Editar información">ℹ️</button>
                                                 <button onClick={() => { setEditandoViaIdx(i); setCreando(false); }} style={st.btnAccion} title="Editar puntos">✏️</button>
                                                 <button onClick={() => eliminarVia(i)} style={st.btnAccion} title="Eliminar vía">🗑️</button>
                                             </div>
@@ -737,7 +968,20 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
                         </div>
                         <div style={{ ...st.modalBody, maxHeight: '82vh', overflowY: 'auto' }}>
                             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 15 }}>
-                                <AutocompleteInput label="Escuela" value={infoCroquis.escuela} onChange={v => setInfoCroquis(p => ({ ...p, escuela: v }))} ph="Ej: Rodellar" opciones={escuelasDisponibles} />
+                                <div>
+                                    <AutocompleteInput label="Escuela" value={infoCroquis.escuela} onChange={v => setInfoCroquis(p => ({ ...p, escuela: v }))} ph="Ej: Rodellar" opciones={escuelasDisponibles} />
+                                    {(() => {
+                                        const inp = infoCroquis.escuela?.toLowerCase().trim();
+                                        const sugerida = inp?.length >= 3 ? escuelasDisponibles.find(e => e.toLowerCase() !== inp && e.toLowerCase().includes(inp)) : null;
+                                        return sugerida ? (
+                                            <div style={{ background: '#eaf4fb', borderRadius: 8, padding: '8px 12px', fontSize: '0.85rem', color: '#2980b9', display: 'flex', alignItems: 'center', gap: 8, marginTop: -8 }}>
+                                                ¿Te refieres a <strong>{sugerida}</strong>?
+                                                <button onClick={() => setInfoCroquis(p => ({ ...p, escuela: sugerida }))}
+                                                    style={{ background: '#3498db', color: 'white', border: 'none', borderRadius: 6, padding: '2px 10px', cursor: 'pointer', fontWeight: 'bold', fontSize: '0.82rem' }}>Sí</button>
+                                            </div>
+                                        ) : null;
+                                    })()}
+                                </div>
                                 <AutocompleteInput label="Sector" value={infoCroquis.sector} onChange={v => setInfoCroquis(p => ({ ...p, sector: v }))} ph="Ej: Surgencia" opciones={sectoresDisponibles} />
                             </div>
                             <div style={{ marginBottom: 15 }}>
@@ -788,7 +1032,11 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
                             <InputModal label="Nombre *" value={viaActual.info.nombre} onChange={v => setViaActual(p => ({ ...p, info: { ...p.info, nombre: v } }))} ph="Ej: La Vía Láctea" />
                             <div style={{ marginBottom: 15 }}>
                                 <label style={st.label}>Grado propuesto</label>
-                                <GradeSelector value={viaActual.info.grado} onChange={v => setViaActual(p => ({ ...p, info: { ...p.info, grado: v } }))} />
+                                <GradeSelector value={viaActual.info.grado} onChange={v => setViaActual(p => ({
+                                    ...p,
+                                    info: { ...p.info, grado: v },
+                                    textos: p.textos.map(t => t.type === 'grado' ? { ...t, text: v } : t)
+                                }))} />
                             </div>
                             <InputModal label="Equipador/a" value={viaActual.info.equipador} onChange={v => setViaActual(p => ({ ...p, info: { ...p.info, equipador: v } }))} ph="Nombre de quien equipó" />
                             <InputModal label="Año" value={viaActual.info.anio} onChange={v => setViaActual(p => ({ ...p, info: { ...p.info, anio: v } }))} type="number" ph="Ej: 2018" />
@@ -840,17 +1088,135 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
                             <button
                                 onClick={() => {
                                     if (gradoTemp) {
-                                        setViaActual(prev => ({ ...prev, textos: [...prev.textos, { text: gradoTemp, x: modalGradoPos.x, y: modalGradoPos.y, type: 'grado' }] }));
+                                        setViaActual(prev => ({
+                                            ...prev,
+                                            info: { ...prev.info, grado: gradoTemp },
+                                            textos: [
+                                                ...prev.textos.filter(t => t.type !== 'grado'),
+                                                { text: gradoTemp, x: modalGradoPos.x, y: modalGradoPos.y, type: 'grado' }
+                                            ]
+                                        }));
                                     }
                                     setModalGradoPos(null);
                                 }}
                                 style={{ ...st.btnPrimario, width: '100%', marginTop: 20, justifyContent: 'center' }}
                             >
-                                {gradoTemp ? `Añadir "${gradoTemp}"` : 'Cancelar'}
+                                {gradoTemp ? `Colocar "${gradoTemp}"` : 'Cancelar'}
                             </button>
                         </div>
                     </div>
                 </div>
+            )}
+
+            {/* MODAL: Texto de vía (reemplaza prompt) */}
+            {textoModalPos && (
+                <div style={st.overlayModal}>
+                    <div style={{ ...st.modal, maxWidth: 380 }}>
+                        <div style={st.modalHeader}>
+                            <h3>Añadir texto</h3>
+                            <button onClick={() => setTextoModalPos(null)} style={st.btnClose}><X size={20} /></button>
+                        </div>
+                        <div style={st.modalBody}>
+                            <input autoFocus value={textoModalValor} onChange={e => setTextoModalValor(e.target.value)}
+                                placeholder="Ej: paso difícil, reunión…" style={st.input}
+                                onKeyDown={e => { if (e.key === 'Enter' && textoModalValor.trim()) {
+                                    setViaActual(prev => ({ ...prev, textos: [...prev.textos, { text: textoModalValor.trim(), x: textoModalPos.x, y: textoModalPos.y, type: 'texto' }] }));
+                                    setTextoModalPos(null);
+                                }}} />
+                            <button onClick={() => {
+                                if (textoModalValor.trim()) {
+                                    setViaActual(prev => ({ ...prev, textos: [...prev.textos, { text: textoModalValor.trim(), x: textoModalPos.x, y: textoModalPos.y, type: 'texto' }] }));
+                                }
+                                setTextoModalPos(null);
+                            }} style={{ ...st.btnPrimario, width: '100%', marginTop: 14, justifyContent: 'center' }}>
+                                {textoModalValor.trim() ? `Añadir "${textoModalValor}"` : 'Cancelar'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* MODAL: Texto libre */}
+            {textoLibrePos && (
+                <div style={st.overlayModal}>
+                    <div style={{ ...st.modal, maxWidth: 380 }}>
+                        <div style={st.modalHeader}>
+                            <h3>Texto libre</h3>
+                            <button onClick={() => setTextoLibrePos(null)} style={st.btnClose}><X size={20} /></button>
+                        </div>
+                        <div style={st.modalBody}>
+                            <input autoFocus value={textoLibreValor} onChange={e => setTextoLibreValor(e.target.value)}
+                                placeholder="Texto de anotación…" style={st.input}
+                                onKeyDown={e => { if (e.key === 'Enter' && textoLibreValor.trim()) {
+                                    setFormas(prev => [...prev, { id: Date.now(), tipo: 'TEXTO_LIBRE', x: textoLibrePos.x, y: textoLibrePos.y, text: textoLibreValor.trim(), color: colorForma, fontSize: 20 }]);
+                                    setTextoLibrePos(null);
+                                }}} />
+                            <button onClick={() => {
+                                if (textoLibreValor.trim()) {
+                                    setFormas(prev => [...prev, { id: Date.now(), tipo: 'TEXTO_LIBRE', x: textoLibrePos.x, y: textoLibrePos.y, text: textoLibreValor.trim(), color: colorForma, fontSize: 20 }]);
+                                }
+                                setTextoLibrePos(null);
+                            }} style={{ ...st.btnPrimario, width: '100%', marginTop: 14, justifyContent: 'center' }}>
+                                {textoLibreValor.trim() ? `Añadir "${textoLibreValor}"` : 'Cancelar'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* MODAL: Editar info de vía existente */}
+            {editandoInfoViaIdx !== null && vias[editandoInfoViaIdx] && (
+                <div style={st.overlayModal}>
+                    <div style={st.modal}>
+                        <div style={st.modalHeader}>
+                            <h3>Datos de la Vía {editandoInfoViaIdx + 1}</h3>
+                            <button onClick={() => setEditandoInfoViaIdx(null)} style={st.btnClose}><X size={20} /></button>
+                        </div>
+                        <div style={st.modalBody}>
+                            <InputModal label="Nombre *"
+                                value={vias[editandoInfoViaIdx].info?.nombre || ''}
+                                onChange={v => setVias(prev => { const c = [...prev]; c[editandoInfoViaIdx] = { ...c[editandoInfoViaIdx], info: { ...c[editandoInfoViaIdx].info, nombre: v } }; return c; })}
+                                ph="Ej: La Vía Láctea" />
+                            <div style={{ marginBottom: 15 }}>
+                                <label style={st.label}>Grado</label>
+                                <GradeSelector
+                                    value={vias[editandoInfoViaIdx].info?.grado || ''}
+                                    onChange={v => setVias(prev => {
+                                        const c = [...prev];
+                                        c[editandoInfoViaIdx] = {
+                                            ...c[editandoInfoViaIdx],
+                                            info: { ...c[editandoInfoViaIdx].info, grado: v },
+                                            textos: c[editandoInfoViaIdx].textos.map(t => t.type === 'grado' ? { ...t, text: v } : t)
+                                        };
+                                        return c;
+                                    })}
+                                />
+                            </div>
+                            <InputModal label="Equipador/a"
+                                value={vias[editandoInfoViaIdx].info?.equipador || ''}
+                                onChange={v => setVias(prev => { const c = [...prev]; c[editandoInfoViaIdx] = { ...c[editandoInfoViaIdx], info: { ...c[editandoInfoViaIdx].info, equipador: v } }; return c; })}
+                                ph="Nombre de quien equipó" />
+                            <InputModal label="Año"
+                                value={vias[editandoInfoViaIdx].info?.anio || ''}
+                                onChange={v => setVias(prev => { const c = [...prev]; c[editandoInfoViaIdx] = { ...c[editandoInfoViaIdx], info: { ...c[editandoInfoViaIdx].info, anio: v } }; return c; })}
+                                type="number" ph="Ej: 2018" />
+                            <label style={st.label}>Información adicional</label>
+                            <textarea
+                                value={vias[editandoInfoViaIdx].info?.info || ''}
+                                onChange={e => { const v = e.target.value; setVias(prev => { const c = [...prev]; c[editandoInfoViaIdx] = { ...c[editandoInfoViaIdx], info: { ...c[editandoInfoViaIdx].info, info: v } }; return c; }); }}
+                                style={{ ...st.input, height: 80, resize: 'none' }} placeholder="Ej: 10 cintas, paso duro en la 3ª chapa." />
+                            <button onClick={() => setEditandoInfoViaIdx(null)} style={{ ...st.btnPrimario, width: '100%', marginTop: 15 }}>Guardar</button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* MODAL: Impresión */}
+            {mostrarImpresion && (
+                <ModalImpresion
+                    croquis={{ ...{infoCroquis, vias, formas, imagenUrl} }}
+                    onClose={() => setMostrarImpresion(false)}
+                />
             )}
 
             {/* MODAL: Capas pendientes */}
@@ -931,6 +1297,48 @@ function PuntoEditable({ x, y, color, onMove, onDelete, contenedorRef, pan, scal
             <g onClick={(e) => { e.stopPropagation(); onDelete(); }} style={{ cursor: 'pointer' }}>
                 <circle cx={x + 12} cy={y - 12} r={8} fill="#e74c3c" />
                 <text x={x + 12} y={y - 8} textAnchor="middle" fill="white" fontSize="12" fontWeight="bold">×</text>
+            </g>
+        </g>
+    );
+}
+
+function TextoEditable({ txt, color, onMove, onDelete, contenedorRef, pan, scale }) {
+    const [dragging, setDragging] = useState(false);
+    const isGrado = txt.type === 'grado';
+
+    const handlePointerDown = (e) => {
+        e.stopPropagation();
+        e.currentTarget.setPointerCapture(e.pointerId);
+        setDragging(true);
+    };
+    const handlePointerMove = (e) => {
+        if (!dragging) return;
+        e.stopPropagation();
+        const rect = contenedorRef.current.getBoundingClientRect();
+        onMove((e.clientX - rect.left - pan.x) / scale, (e.clientY - rect.top - pan.y) / scale);
+    };
+    const handlePointerUp = (e) => { e.stopPropagation(); setDragging(false); };
+
+    return (
+        <g>
+            <g transform={`translate(${txt.x}, ${txt.y})`}
+                style={{ cursor: 'move' }}
+                onPointerDown={handlePointerDown} onPointerMove={handlePointerMove} onPointerUp={handlePointerUp}>
+                {isGrado ? (
+                    <>
+                        <rect x="-22" y="-14" width="44" height="28" rx="4" fill="white" stroke={color} strokeWidth="2" />
+                        <text x="0" y="5" fill={color} fontSize="14" fontWeight="bold" textAnchor="middle">{txt.text}</text>
+                    </>
+                ) : (
+                    <>
+                        <text x="0" y="0" fill="white" stroke="black" strokeWidth="3" fontSize="18" fontWeight="bold" paintOrder="stroke">{txt.text}</text>
+                        <text x="0" y="0" fill="white" fontSize="18" fontWeight="bold">{txt.text}</text>
+                    </>
+                )}
+            </g>
+            <g onClick={(e) => { e.stopPropagation(); onDelete(); }} style={{ cursor: 'pointer' }}>
+                <circle cx={txt.x + (isGrado ? 22 : 60)} cy={txt.y - 10} r={8} fill="#e74c3c" />
+                <text x={txt.x + (isGrado ? 22 : 60)} y={txt.y - 6} textAnchor="middle" fill="white" fontSize="12" fontWeight="bold">×</text>
             </g>
         </g>
     );

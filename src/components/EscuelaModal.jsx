@@ -1,23 +1,24 @@
 import React, { useState } from 'react';
 import { X, Mountain, Camera } from 'lucide-react';
-import { db, storage, auth } from '../firebase';
-import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
-import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { db } from '../firebase';
+import { collection, addDoc, doc, updateDoc, serverTimestamp } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
 import LocationPicker from './LocationPicker';
-import { procesarImagenParaSubir, formatearMB, MAX_MB } from '../utils/imagen';
+import { procesarImagenParaSubir, subirACloudinary, formatearMB, MAX_MB } from '../utils/imagen';
 
-export default function EscuelaModal({ onClose, onCreada }) {
+// escuelaEditar: objeto con datos existentes (modo edición), o null (modo creación)
+export default function EscuelaModal({ onClose, onCreada, onEditada, escuelaEditar }) {
+    const modoEdicion = Boolean(escuelaEditar);
     const { usuario, pedirAuth } = useAuth();
-    const [nombre, setNombre] = useState('');
-    const [descripcion, setDescripcion] = useState('');
-    const [acceso, setAcceso] = useState('');
-    const [restricciones, setRestricciones] = useState('');
-    const [lat, setLat] = useState('');
-    const [lng, setLng] = useState('');
-    const [mapsUrl, setMapsUrl] = useState('');
+    const [nombre, setNombre] = useState(escuelaEditar?.nombre || '');
+    const [descripcion, setDescripcion] = useState(escuelaEditar?.descripcion || '');
+    const [acceso, setAcceso] = useState(escuelaEditar?.acceso || '');
+    const [restricciones, setRestricciones] = useState(escuelaEditar?.restricciones || '');
+    const [lat, setLat] = useState(escuelaEditar?.lat ?? '');
+    const [lng, setLng] = useState(escuelaEditar?.lng ?? '');
+    const [mapsUrl, setMapsUrl] = useState(escuelaEditar?.mapsUrl || '');
     const [imagenFile, setImagenFile] = useState(null);
-    const [imagenPreview, setImagenPreview] = useState(null);
+    const [imagenPreview, setImagenPreview] = useState(escuelaEditar?.imagenUrl || null);
     const [guardando, setGuardando] = useState(false);
     const [progreso, setProgreso] = useState('');
     const [error, setError] = useState('');
@@ -44,21 +45,15 @@ export default function EscuelaModal({ onClose, onCreada }) {
         setGuardando(true);
         setError('');
         try {
-            let imagenUrl = null;
+            let imagenUrl = escuelaEditar?.imagenUrl || null; // mantener imagen anterior si no hay nueva
             if (imagenFile) {
                 const resultado = await procesarImagenParaSubir(imagenFile, setProgreso);
                 if (resultado.error) { setError(resultado.error); setGuardando(false); return; }
-                if (resultado.comprimida) {
-                    setProgreso(`Subiendo imagen (${formatearMB(resultado.blob.size)}, comprimida de ${resultado.originalMB.toFixed(1)} MB)…`);
-                } else {
-                    setProgreso('Subiendo imagen…');
-                }
-                const storageRef = ref(storage, `escuelas/${usuario.uid}/${Date.now()}`);
-                await uploadBytes(storageRef, resultado.blob);
-                imagenUrl = await getDownloadURL(storageRef);
+                imagenUrl = await subirACloudinary(resultado.blob, setProgreso);
                 setProgreso('');
             }
-            const docRef = await addDoc(collection(db, 'escuelas'), {
+
+            const datos = {
                 nombre: nombre.trim(),
                 descripcion: descripcion.trim(),
                 acceso: acceso.trim(),
@@ -67,10 +62,19 @@ export default function EscuelaModal({ onClose, onCreada }) {
                 lng: lng !== '' ? parseFloat(lng) : null,
                 mapsUrl: mapsUrl.trim(),
                 imagenUrl,
-                creadoPor: usuario.uid,
-                createdAt: serverTimestamp(),
-            });
-            onCreada?.({ id: docRef.id, nombre: nombre.trim(), lat, lng, imagenUrl, descripcion });
+            };
+
+            if (modoEdicion) {
+                await updateDoc(doc(db, 'escuelas', escuelaEditar.id), datos);
+                onEditada?.({ ...escuelaEditar, ...datos });
+            } else {
+                const docRef = await addDoc(collection(db, 'escuelas'), {
+                    ...datos,
+                    creadoPor: usuario.uid,
+                    createdAt: serverTimestamp(),
+                });
+                onCreada?.({ id: docRef.id, ...datos });
+            }
             onClose();
         } catch (e) {
             setError('Error al guardar: ' + e.message);
@@ -83,7 +87,7 @@ export default function EscuelaModal({ onClose, onCreada }) {
             <div style={st.modal}>
                 <div style={st.header}>
                     <span style={{ color: 'white', fontWeight: 'bold', fontSize: '1rem', display: 'flex', alignItems: 'center', gap: 8 }}>
-                        <Mountain size={20} /> Nueva Escuela de Escalada
+                        <Mountain size={20} /> {modoEdicion ? 'Editar Escuela' : 'Nueva Escuela de Escalada'}
                     </span>
                     <button onClick={onClose} style={st.btnClose}><X size={20} /></button>
                 </div>
@@ -139,7 +143,7 @@ export default function EscuelaModal({ onClose, onCreada }) {
                     {progreso && <p style={st.progreso}>{progreso}</p>}
 
                     <button onClick={guardar} disabled={guardando} style={st.btnGuardar}>
-                        {guardando ? 'Guardando…' : 'Crear escuela'}
+                        {guardando ? 'Guardando…' : modoEdicion ? 'Guardar cambios' : 'Crear escuela'}
                     </button>
                 </div>
             </div>

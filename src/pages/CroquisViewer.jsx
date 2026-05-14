@@ -1,6 +1,9 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { ArrowLeft, ZoomIn, ZoomOut, Edit, Info, X, Sun, Calendar, MapPin, AlertTriangle } from 'lucide-react';
+import { ArrowLeft, ZoomIn, ZoomOut, Edit, Info, X, Sun, Calendar, MapPin, AlertTriangle, MessageCircle, Trash2 } from 'lucide-react';
+import { db } from '../firebase';
+import { deleteDoc, doc } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
+import ComentariosCroquis from '../components/ComentariosCroquis';
 
 const generarCurvaSuave = (puntos) => {
     if (puntos.length === 0) return "";
@@ -30,13 +33,22 @@ export default function CroquisViewer({ croquis, onVolver, onEditar }) {
     const [imgSize, setImgSize] = useState({ w: 800, h: 600 });
     const [viaSeleccionada, setViaSeleccionada] = useState(null);
     const [mostrarInfo, setMostrarInfo] = useState(false);
+    const [mostrarComentarios, setMostrarComentarios] = useState(false);
+    const [fotoIdx, setFotoIdx] = useState(0);
     const contenedorRef = useRef(null);
 
+    // Soporte multi-foto (compatibilidad con formato antiguo)
+    const fotos = croquis.fotos?.length > 0
+        ? croquis.fotos
+        : [{ id: 'f0', imagenUrl: croquis.imagenUrl, vias: croquis.vias || [], formas: croquis.formas || [] }];
+    const fotoActual = fotos[fotoIdx] || fotos[0];
+
     const info = croquis.infoCroquis || {};
-    const vias = croquis.vias || [];
+    const vias = fotoActual?.vias || [];
 
     useEffect(() => {
-        if (!croquis.imagenUrl) return;
+        const url = fotoActual?.imagenUrl;
+        if (!url) return;
         const img = new Image();
         img.onload = () => {
             setImgSize({ w: img.width, h: img.height });
@@ -46,8 +58,8 @@ export default function CroquisViewer({ croquis, onVolver, onEditar }) {
             setScale(s);
             setPan({ x: (window.innerWidth - img.width * s) / 2, y: 60 });
         };
-        img.src = croquis.imagenUrl;
-    }, [croquis.imagenUrl]);
+        img.src = url;
+    }, [fotoIdx]); // eslint-disable-line
 
     const handleWheel = (e) => {
         e.preventDefault();
@@ -77,7 +89,32 @@ export default function CroquisViewer({ croquis, onVolver, onEditar }) {
                 <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                     <button onClick={() => setScale(s => s * 1.2)} style={st.btnIcono}><ZoomIn size={18} /></button>
                     <button onClick={() => setScale(s => s * 0.8)} style={st.btnIcono}><ZoomOut size={18} /></button>
+                    {fotos.length > 1 && (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 4, background: 'rgba(255,255,255,0.1)', borderRadius: 8, padding: '3px 6px' }}>
+                            <button onClick={() => setFotoIdx(i => Math.max(0, i - 1))} disabled={fotoIdx === 0}
+                                style={{ ...st.btnIcono, padding: '4px 8px', opacity: fotoIdx === 0 ? 0.4 : 1 }}>◀</button>
+                            <span style={{ color: 'white', fontSize: '0.8rem', fontWeight: 'bold' }}>{fotoIdx + 1}/{fotos.length}</span>
+                            <button onClick={() => setFotoIdx(i => Math.min(fotos.length - 1, i + 1))} disabled={fotoIdx === fotos.length - 1}
+                                style={{ ...st.btnIcono, padding: '4px 8px', opacity: fotoIdx === fotos.length - 1 ? 0.4 : 1 }}>▶</button>
+                        </div>
+                    )}
                     <button onClick={() => setMostrarInfo(true)} style={st.btnIcono}><Info size={18} /></button>
+                    <button onClick={() => setMostrarComentarios(true)} style={st.btnIcono} title="Comentarios">
+                        <MessageCircle size={18} />
+                    </button>
+                    {usuario?.uid === croquis.creadoPor && (
+                        <button
+                            onClick={async () => {
+                                if (!window.confirm('¿Eliminar este croquis? Esta acción no se puede deshacer.')) return;
+                                await deleteDoc(doc(db, 'croquis_escalada', croquis.id));
+                                onVolver();
+                            }}
+                            style={{ ...st.btnIcono, background: 'rgba(231,76,60,0.5)' }}
+                            title="Eliminar croquis"
+                        >
+                            <Trash2 size={18} />
+                        </button>
+                    )}
                     <button onClick={() => onEditar(croquis)} style={{ ...st.btnIcono, background: 'rgba(52,152,219,0.5)' }} title="Editar croquis">
                         <Edit size={18} />
                         <span style={{ color: 'white', fontSize: '0.8rem', marginLeft: 4 }}>Editar</span>
@@ -100,7 +137,7 @@ export default function CroquisViewer({ croquis, onVolver, onEditar }) {
                     transform: `translate(${pan.x}px, ${pan.y}px) scale(${scale})`,
                     width: imgSize.w, height: imgSize.h
                 }}>
-                    <img src={croquis.imagenUrl} alt="Pared" style={{ display: 'block', width: '100%', height: '100%', pointerEvents: 'none' }} />
+                    <img src={fotoActual?.imagenUrl} alt="Pared" style={{ display: 'block', width: '100%', height: '100%', pointerEvents: 'none' }} />
                     <svg width={imgSize.w} height={imgSize.h} style={{ position: 'absolute', top: 0, left: 0 }}>
                         {vias.map((via, idx) => {
                             const dir = via.inicio && via.fin ? via.fin.y - via.inicio.y : -1;
@@ -165,6 +202,21 @@ export default function CroquisViewer({ croquis, onVolver, onEditar }) {
                 </div>
             )}
 
+            {/* PANEL: Comentarios (drawer lateral) */}
+            {mostrarComentarios && (
+                <div style={st.drawerOverlay} onClick={() => setMostrarComentarios(false)}>
+                    <div style={st.drawer} onClick={e => e.stopPropagation()}>
+                        <div style={st.drawerHeader}>
+                            <span style={{ fontWeight: 'bold', color: '#2c3e50' }}>Comentarios</span>
+                            <button onClick={() => setMostrarComentarios(false)} style={st.btnClose}><X size={20} /></button>
+                        </div>
+                        <div style={{ overflowY: 'auto', flex: 1 }}>
+                            <ComentariosCroquis croquis={croquis} />
+                        </div>
+                    </div>
+                </div>
+            )}
+
             {/* MODAL: Info vía */}
             {viaSeleccionada && (
                 <div style={st.overlay}>
@@ -221,4 +273,7 @@ const st = {
     modalBody: { padding: 20 },
     btnClose: { background: 'none', border: 'none', color: '#7f8c8d', cursor: 'pointer' },
     bloque: { background: '#f8f9fa', border: '1px solid #ecf0f1', borderRadius: 8, padding: '10px 14px', marginTop: 10 },
+    drawerOverlay: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', zIndex: 1500, display: 'flex', justifyContent: 'flex-end' },
+    drawer: { width: '100%', maxWidth: 420, background: 'white', display: 'flex', flexDirection: 'column', boxShadow: '-8px 0 30px rgba(0,0,0,0.2)', height: '100%' },
+    drawerHeader: { background: '#f8f9fa', padding: '14px 20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #ecf0f1', flexShrink: 0 },
 };
