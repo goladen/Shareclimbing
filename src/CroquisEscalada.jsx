@@ -62,15 +62,24 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
     const setImagenEsArchivo = (v) => setFotos(fs => fs.map((f, i) => i === fotoIdx ? { ...f, imagenEsArchivo: v } : f));
     const setImagenFile = (v) => setFotos(fs => fs.map((f, i) => i === fotoIdx ? { ...f, imagenFile: v } : f));
     const setVias = (fn) => setFotos(fs => fs.map((f, i) => i === fotoIdx ? { ...f, vias: typeof fn === 'function' ? fn(f.vias || []) : fn } : f));
+    const combinaciones = foto.combinaciones || [];
+    const setCombinaciones = (fn) => setFotos(fs => fs.map((f, i) => i === fotoIdx ? { ...f, combinaciones: typeof fn === 'function' ? fn(f.combinaciones || []) : fn } : f));
 
     const [imgSize, setImgSize] = useState({ w: 800, h: 600 });
+    // Ratio entre dimensiones cargadas y originales (corrige posición de vías tras compresión de imagen)
+    const xRatio = foto.srcW ? imgSize.w / foto.srcW : 1;
+    const yRatio = foto.srcH ? imgSize.h / foto.srcH : 1;
     const [visibilidad, setVisibilidad] = useState(croquisInicial?.visibilidad || 'publico');
 
     // Detectar si editamos un croquis ajeno
     const croquísId = useRef(croquisInicial?.id || null);
     const propietarioCroquis = croquisInicial?.creadoPor || null;
-    const esAjeno = propietarioCroquis && usuario && propietarioCroquis !== usuario.uid;
-    const esMio = !propietarioCroquis || (usuario && propietarioCroquis === usuario.uid);
+    const esEditor = !!(usuario && croquisInicial && (
+        (croquisInicial.editores || []).includes(usuario.uid) ||
+        (croquisInicial.editoresEmail || []).includes(usuario.email)
+    ));
+    const esAjeno = propietarioCroquis && usuario && propietarioCroquis !== usuario.uid && !esEditor;
+    const esMio = !propietarioCroquis || (usuario && (propietarioCroquis === usuario.uid || esEditor));
 
     // Pan & Zoom
     const [scale, setScale] = useState(1);
@@ -83,11 +92,24 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
     const [herramienta, setHerramienta] = useState('PAN');
     const [viaActual, setViaActual] = useState({
         inicio: null, fin: null, intermedios: [], textos: [],
-        info: { nombre: '', grado: '', equipador: '', info: '', anio: '' },
+        info: { nombre: '', grado: '', equipador: '', info: '', anio: '', numero: '' },
         color: COLORES[0], grosor: 4
     });
+    // Creación de combinación
+    const [esCreandoCombinacion, setEsCreandoCombinacion] = useState(false);
+    const [editandoCombinacionIdx, setEditandoCombinacionIdx] = useState(null);
+    const [combinacionActual, setCombinacionActual] = useState({
+        inicio: null, fin: null, intermedios: [], textos: [],
+        info: { nombre: '', grado: '', equipador: '', info: '', anio: '' },
+        color: '#8e44ad', grosor: 4
+    });
+    const [mostrarModalInfoCombi, setMostrarModalInfoCombi] = useState(false);
+    const [editandoInfoCombiIdx, setEditandoInfoCombiIdx] = useState(null);
 
-    const [infoCroquis, setInfoCroquis] = useState(croquisInicial?.infoCroquis || INFO_CROQUIS_INIT);
+    const [infoCroquis, setInfoCroquis] = useState(
+        croquisInicial?.infoCroquis
+        || (croquisInicial?.escuelaInicial ? { ...INFO_CROQUIS_INIT, escuela: croquisInicial.escuelaInicial } : INFO_CROQUIS_INIT)
+    );
     const [mostrarModalCroquis, setMostrarModalCroquis] = useState(false);
     const [guardando, setGuardando] = useState(false);
     const [progresoSubida, setProgresoSubida] = useState('');
@@ -99,6 +121,8 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
     const [viaVisualizando, setViaVisualizando] = useState(null);
     const [modalGradoPos, setModalGradoPos] = useState(null); // {x,y} al clicar con tool GRADO
     const [gradoTemp, setGradoTemp] = useState('');
+    const [gradoFontSize, setGradoFontSize] = useState(14);
+    const [textoModalFontSize, setTextoModalFontSize] = useState(18);
     const [mostrarCapas, setMostrarCapas] = useState(false);
     const [capas, setCapas] = useState(croquisInicial?.capas || []);
 
@@ -134,11 +158,14 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
         if (!url) { setImgSize({ w: 800, h: 600 }); return; }
         const img = new Image();
         img.onload = () => {
-            setImgSize({ w: img.width, h: img.height });
-            const wScale = window.innerWidth / img.width;
-            const hScale = (window.innerHeight - 200) / img.height;
+            const nw = img.naturalWidth, nh = img.naturalHeight;
+            setImgSize({ w: nw, h: nh });
+            const wScale = window.innerWidth / nw;
+            const hScale = (window.innerHeight - 200) / nh;
             setScale(Math.min(wScale, hScale, 1) * 0.9);
             setPan({ x: 50, y: 50 });
+            // Solo guardar srcW/srcH si la foto aún no los tiene (Firestore los trae ya)
+            setFotos(fs => fs.map((f, i) => (i === fotoIdx && !f.srcW) ? { ...f, srcW: nw, srcH: nh } : f));
         };
         img.src = url;
     }, [fotoIdx]); // eslint-disable-line
@@ -182,12 +209,14 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
     const procesarImagen = (src) => {
         const img = new Image();
         img.onload = () => {
-            setImgSize({ w: img.width, h: img.height });
-            const wScale = window.innerWidth / img.width;
-            const hScale = (window.innerHeight - 200) / img.height;
+            const nw = img.naturalWidth, nh = img.naturalHeight;
+            setImgSize({ w: nw, h: nh });
+            const wScale = window.innerWidth / nw;
+            const hScale = (window.innerHeight - 200) / nh;
             setScale(Math.min(wScale, hScale, 1) * 0.9);
             setPan({ x: 50, y: 50 });
             setImagenUrl(src);
+            setFotos(fs => fs.map((f, i) => i === fotoIdx ? { ...f, srcW: nw, srcH: nh } : f));
         };
         img.src = src;
     };
@@ -226,8 +255,11 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
                 fotasGuardadas.push({
                     id: f.id || `f${i}`,
                     imagenUrl: urlFinal,
+                    srcW: f.srcW || null,
+                    srcH: f.srcH || null,
                     vias: (f.vias || []).map(v => ({ id: v.id, inicio: v.inicio, fin: v.fin, intermedios: v.intermedios, textos: v.textos, info: v.info, color: v.color, grosor: v.grosor || 4 })),
-                    formas: f.formas || []
+                    formas: f.formas || [],
+                    combinaciones: (f.combinaciones || []).map(c => ({ id: c.id, inicio: c.inicio, fin: c.fin, intermedios: c.intermedios, textos: c.textos, info: c.info, color: c.color, grosor: c.grosor || 4 }))
                 });
             }
             setProgresoSubida('');
@@ -239,7 +271,7 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
                 vias: fotasGuardadas[0]?.vias || [],
                 formas: fotasGuardadas[0]?.formas || [],
                 visibilidad,
-                creadoPor: auth.currentUser?.uid || 'anonimo',
+                creadoPor: propietarioCroquis || auth.currentUser?.uid || 'anonimo',
                 updatedAt: serverTimestamp()
             };
 
@@ -320,8 +352,10 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
     // ─── NAVEGACIÓN ENTRE FOTOS ───
     const cambiarFoto = (newIdx) => {
         if (creando) { setCreando(false); setHerramienta('PAN'); }
+        if (esCreandoCombinacion) { setEsCreandoCombinacion(false); setHerramienta('PAN'); }
         setEditandoViaIdx(null);
         setEditandoInfoViaIdx(null);
+        setEditandoCombinacionIdx(null);
         setFotoIdx(newIdx);
     };
 
@@ -357,16 +391,23 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
         e.preventDefault();
         setScale(s => Math.min(Math.max(s * (e.deltaY > 0 ? 0.9 : 1.1), 0.1), 5));
     };
+    useEffect(() => {
+        const el = contenedorRef.current;
+        if (!el) return;
+        el.addEventListener('wheel', handleWheel, { passive: false });
+        return () => el.removeEventListener('wheel', handleWheel);
+    });
 
     const screenToSvg = (clientX, clientY) => {
         const rect = contenedorRef.current.getBoundingClientRect();
-        return { x: (clientX - rect.left - pan.x) / scale, y: (clientY - rect.top - pan.y) / scale };
+        return {
+            x: (clientX - rect.left - pan.x) / scale / xRatio,
+            y: (clientY - rect.top - pan.y) / scale / yRatio,
+        };
     };
 
     const handlePointerDown = (e) => {
-        if (editandoViaIdx !== null) return;
-
-        // Herramientas de forma
+        // Herramientas de forma (shapes)
         if (herramientaForma === 'TEXTO_LIBRE') {
             const { x, y } = screenToSvg(e.clientX, e.clientY);
             setTextoLibrePos({ x, y });
@@ -380,12 +421,12 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
             return;
         }
 
-        if (!creando || herramienta === 'PAN') {
-            setIsDragging(true);
-            setDragStart({ x: e.clientX - pan.x, y: e.clientY - pan.y });
-        } else {
+        if (herramienta !== 'PAN' && (creando || esCreandoCombinacion || editandoViaIdx !== null || editandoCombinacionIdx !== null)) {
             const { x, y } = screenToSvg(e.clientX, e.clientY);
             aplicarHerramienta(x, y);
+        } else {
+            setIsDragging(true);
+            setDragStart({ x: e.clientX - pan.x, y: e.clientY - pan.y });
         }
     };
 
@@ -413,16 +454,31 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
         setIsDragging(false);
     };
 
-    // ─── HERRAMIENTAS DE CREACIÓN ───
+    // ─── HERRAMIENTAS DE CREACIÓN / EDICIÓN ───
     const aplicarHerramienta = (x, y) => {
+        const enEdicionVia = editandoViaIdx !== null;
+        const enEdicionCombi = editandoCombinacionIdx !== null;
         if (herramienta === 'INICIO') {
-            setViaActual(prev => ({ ...prev, inicio: { x, y } }));
+            if (enEdicionVia) setVias(prev => { const c = [...prev]; c[editandoViaIdx] = { ...c[editandoViaIdx], inicio: { x, y } }; return c; });
+            else if (enEdicionCombi) setCombinaciones(prev => { const c = [...prev]; c[editandoCombinacionIdx] = { ...c[editandoCombinacionIdx], inicio: { x, y } }; return c; });
+            else if (esCreandoCombinacion) setCombinacionActual(prev => ({ ...prev, inicio: { x, y } }));
+            else setViaActual(prev => ({ ...prev, inicio: { x, y } }));
         } else if (herramienta === 'FIN') {
-            setViaActual(prev => ({ ...prev, fin: { x, y } }));
+            if (enEdicionVia) setVias(prev => { const c = [...prev]; c[editandoViaIdx] = { ...c[editandoViaIdx], fin: { x, y } }; return c; });
+            else if (enEdicionCombi) setCombinaciones(prev => { const c = [...prev]; c[editandoCombinacionIdx] = { ...c[editandoCombinacionIdx], fin: { x, y } }; return c; });
+            else if (esCreandoCombinacion) setCombinacionActual(prev => ({ ...prev, fin: { x, y } }));
+            else setViaActual(prev => ({ ...prev, fin: { x, y } }));
         } else if (herramienta === 'INTERMEDIO') {
-            setViaActual(prev => ({ ...prev, intermedios: [...prev.intermedios, { x, y }] }));
+            if (enEdicionVia) setVias(prev => { const c = [...prev]; c[editandoViaIdx] = { ...c[editandoViaIdx], intermedios: [...c[editandoViaIdx].intermedios, { x, y }] }; return c; });
+            else if (enEdicionCombi) setCombinaciones(prev => { const c = [...prev]; c[editandoCombinacionIdx] = { ...c[editandoCombinacionIdx], intermedios: [...c[editandoCombinacionIdx].intermedios, { x, y }] }; return c; });
+            else if (esCreandoCombinacion) setCombinacionActual(prev => ({ ...prev, intermedios: [...prev.intermedios, { x, y }] }));
+            else setViaActual(prev => ({ ...prev, intermedios: [...prev.intermedios, { x, y }] }));
         } else if (herramienta === 'GRADO') {
-            setGradoTemp(viaActual.info.grado || '');
+            const g = enEdicionVia ? (vias[editandoViaIdx]?.info?.grado || '')
+                : enEdicionCombi ? (combinaciones[editandoCombinacionIdx]?.info?.grado || '')
+                : esCreandoCombinacion ? (combinacionActual.info.grado || '')
+                : (viaActual.info.grado || '');
+            setGradoTemp(g);
             setModalGradoPos({ x, y });
         } else if (herramienta === 'TEXTO') {
             setTextoModalPos({ x, y });
@@ -432,12 +488,27 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
 
     const iniciarNuevaVia = () => {
         setEditandoViaIdx(null);
+        setEditandoCombinacionIdx(null);
+        setEsCreandoCombinacion(false);
         setCreando(true);
         setHerramienta('INICIO');
         setViaActual({
             inicio: null, fin: null, intermedios: [], textos: [],
-            info: { nombre: '', grado: '', equipador: '', info: '', anio: '' },
+            info: { nombre: '', grado: '', equipador: '', info: '', anio: '', numero: '' },
             color: COLORES[vias.length % COLORES.length], grosor: 4
+        });
+    };
+
+    const iniciarNuevaCombinacion = () => {
+        setEditandoViaIdx(null);
+        setEditandoCombinacionIdx(null);
+        setCreando(false);
+        setEsCreandoCombinacion(true);
+        setHerramienta('INICIO');
+        setCombinacionActual({
+            inicio: null, fin: null, intermedios: [], textos: [],
+            info: { nombre: '', grado: '', equipador: '', info: '', anio: '' },
+            color: '#8e44ad', grosor: 4
         });
     };
 
@@ -447,6 +518,14 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
         const nuevasVias = [...vias, { ...viaActual, id: Date.now() }].sort((a, b) => a.inicio.x - b.inicio.x);
         setVias(nuevasVias);
         setCreando(false);
+        setHerramienta('PAN');
+    };
+
+    const guardarCombinacion = () => {
+        if (!combinacionActual.inicio || !combinacionActual.fin) { alert("La combinación necesita punto de INICIO y FIN."); return; }
+        if (!combinacionActual.info.nombre.trim()) { alert("Dale un nombre a la combinación (botón ℹ️)."); return; }
+        setCombinaciones(prev => [...prev, { ...combinacionActual, id: Date.now() }]);
+        setEsCreandoCombinacion(false);
         setHerramienta('PAN');
     };
 
@@ -478,6 +557,35 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
         if (!window.confirm('¿Eliminar esta vía?')) return;
         setVias(prev => prev.filter((_, i) => i !== idx));
         if (editandoViaIdx === idx) setEditandoViaIdx(null);
+    };
+
+    const moverPuntoCombinacion = (idx, tipo, pIdx, x, y) => {
+        setCombinaciones(prev => {
+            const copia = [...prev];
+            const combi = { ...copia[idx], intermedios: [...copia[idx].intermedios] };
+            if (tipo === 'inicio') combi.inicio = { x, y };
+            else if (tipo === 'fin') combi.fin = { x, y };
+            else combi.intermedios[pIdx] = { x, y };
+            copia[idx] = combi;
+            return copia;
+        });
+    };
+
+    const eliminarPuntoCombinacion = (idx, tipo, pIdx) => {
+        setCombinaciones(prev => {
+            const copia = [...prev];
+            const combi = { ...copia[idx], intermedios: [...copia[idx].intermedios] };
+            if (tipo === 'intermedio') combi.intermedios = combi.intermedios.filter((_, i) => i !== pIdx);
+            else combi[tipo] = null;
+            copia[idx] = combi;
+            return copia;
+        });
+    };
+
+    const eliminarCombinacion = (idx) => {
+        if (!window.confirm('¿Eliminar esta combinación?')) return;
+        setCombinaciones(prev => prev.filter((_, i) => i !== idx));
+        if (editandoCombinacionIdx === idx) setEditandoCombinacionIdx(null);
     };
 
     // ─── RENDER: PANTALLA DE CARGA (foto vacía) ───
@@ -525,6 +633,14 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
     });
     const puntosViaActual = viaActual.inicio
         ? [viaActual.inicio, ...intermediosOrdenados, ...(viaActual.fin ? [viaActual.fin] : [])]
+        : [];
+
+    const intermediosCombiOrdenados = [...combinacionActual.intermedios].sort((a, b) => {
+        const dir = combinacionActual.inicio && combinacionActual.fin ? combinacionActual.fin.y - combinacionActual.inicio.y : -1;
+        return dir < 0 ? b.y - a.y : a.y - b.y;
+    });
+    const puntosCombinacionActual = combinacionActual.inicio
+        ? [combinacionActual.inicio, ...intermediosCombiOrdenados, ...(combinacionActual.fin ? [combinacionActual.fin] : [])]
         : [];
 
     const capasPendientes = capas.filter(c => c.estado === 'pendiente');
@@ -616,8 +732,11 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
                     </button>
 
                     <div style={st.divider} />
-                    {!creando && editandoViaIdx === null && (
-                        <button onClick={iniciarNuevaVia} style={st.btnPrimario}><Plus size={18} /> Nueva Vía</button>
+                    {!creando && !esCreandoCombinacion && editandoViaIdx === null && editandoCombinacionIdx === null && (
+                        <>
+                            <button onClick={iniciarNuevaVia} style={st.btnPrimario}><Plus size={18} /> Nueva Vía</button>
+                            <button onClick={iniciarNuevaCombinacion} style={{ ...st.btnPrimario, background: 'rgba(142,68,173,0.7)' }}><Plus size={18} /> Combinación</button>
+                        </>
                     )}
                     {creando && (
                         <div style={{ display: 'flex', gap: 8 }}>
@@ -625,8 +744,17 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
                             <button onClick={guardarVia} style={st.btnExito}><CheckCircle size={18} /> Crear Vía</button>
                         </div>
                     )}
+                    {esCreandoCombinacion && (
+                        <div style={{ display: 'flex', gap: 8 }}>
+                            <button onClick={() => { setEsCreandoCombinacion(false); setHerramienta('PAN'); }} style={st.btnPeligro}>Cancelar</button>
+                            <button onClick={guardarCombinacion} style={{ ...st.btnExito, background: 'rgba(142,68,173,0.8)' }}><CheckCircle size={18} /> Crear Combinación</button>
+                        </div>
+                    )}
                     {editandoViaIdx !== null && (
-                        <button onClick={() => setEditandoViaIdx(null)} style={st.btnExito}><CheckCircle size={18} /> Fin Edición</button>
+                        <button onClick={() => { setEditandoViaIdx(null); setHerramienta('PAN'); }} style={st.btnExito}><CheckCircle size={18} /> Fin Edición</button>
+                    )}
+                    {editandoCombinacionIdx !== null && (
+                        <button onClick={() => { setEditandoCombinacionIdx(null); setHerramienta('PAN'); }} style={{ ...st.btnExito, background: 'rgba(142,68,173,0.8)' }}><CheckCircle size={18} /> Fin Edición</button>
                     )}
                 </div>
             </div>
@@ -639,45 +767,86 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
                 </div>
             )}
 
-            {/* BARRA HERRAMIENTAS (creando) */}
-            {creando && (
-                <div style={st.toolsBar}>
-                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'center' }}>
-                        <ToolBtn h="PAN" act={herramienta} set={setHerramienta} icon={<Move size={16} />} text="Mover" color="#34495e" />
-                        <ToolBtn h="INICIO" act={herramienta} set={setHerramienta} icon={<MapPin size={16} />} text="Inicio" color="#e74c3c" />
-                        <ToolBtn h="INTERMEDIO" act={herramienta} set={setHerramienta} icon={<MousePointer2 size={16} />} text="P.Intermedio" color="#f39c12" />
-                        <ToolBtn h="FIN" act={herramienta} set={setHerramienta} icon={<CheckCircle size={16} />} text="Fin" color="#2ecc71" />
-                        <ToolBtn h="GRADO" act={herramienta} set={setHerramienta} icon={<Type size={16} />} text="Grado" color="#9b59b6" />
-                        <ToolBtn h="TEXTO" act={herramienta} set={setHerramienta} icon={<Edit size={16} />} text="Texto" color="#3498db" />
-                        <div style={{ width: 2, background: '#bdc3c7', margin: '0 5px' }} />
-                        <button onClick={() => setMostrarModalInfo(true)} style={{ ...st.btnInfo, border: viaActual.info.nombre ? '2px solid #2ecc71' : '2px solid #e74c3c' }}>
-                            <Info size={18} /> Info de la Vía
-                        </button>
+            {/* BARRA HERRAMIENTAS UNIFICADA (creando o editando vía/combinación) */}
+            {(creando || esCreandoCombinacion || editandoViaIdx !== null || editandoCombinacionIdx !== null) && (() => {
+                const enEdicionVia = editandoViaIdx !== null;
+                const enEdicionCombi = editandoCombinacionIdx !== null;
+                const esCombi = esCreandoCombinacion || enEdicionCombi;
+                const colorActivo = enEdicionVia ? (vias[editandoViaIdx]?.color || COLORES[0])
+                    : enEdicionCombi ? (combinaciones[editandoCombinacionIdx]?.color || '#8e44ad')
+                    : esCreandoCombinacion ? combinacionActual.color
+                    : viaActual.color;
+                const grosorActivo = enEdicionVia ? (vias[editandoViaIdx]?.grosor || 4)
+                    : enEdicionCombi ? (combinaciones[editandoCombinacionIdx]?.grosor || 4)
+                    : esCreandoCombinacion ? (combinacionActual.grosor || 4)
+                    : (viaActual.grosor || 4);
+                const nombreActivo = enEdicionVia ? vias[editandoViaIdx]?.info?.nombre
+                    : enEdicionCombi ? combinaciones[editandoCombinacionIdx]?.info?.nombre
+                    : esCreandoCombinacion ? combinacionActual.info.nombre
+                    : viaActual.info.nombre;
+                const setColor = (c) => {
+                    if (enEdicionVia) setVias(prev => { const cp = [...prev]; cp[editandoViaIdx] = { ...cp[editandoViaIdx], color: c }; return cp; });
+                    else if (enEdicionCombi) setCombinaciones(prev => { const cp = [...prev]; cp[editandoCombinacionIdx] = { ...cp[editandoCombinacionIdx], color: c }; return cp; });
+                    else if (esCreandoCombinacion) setCombinacionActual(p => ({ ...p, color: c }));
+                    else setViaActual(p => ({ ...p, color: c }));
+                };
+                const setGrosor = (g) => {
+                    if (enEdicionVia) setVias(prev => { const cp = [...prev]; cp[editandoViaIdx] = { ...cp[editandoViaIdx], grosor: g }; return cp; });
+                    else if (enEdicionCombi) setCombinaciones(prev => { const cp = [...prev]; cp[editandoCombinacionIdx] = { ...cp[editandoCombinacionIdx], grosor: g }; return cp; });
+                    else if (esCreandoCombinacion) setCombinacionActual(p => ({ ...p, grosor: g }));
+                    else setViaActual(p => ({ ...p, grosor: g }));
+                };
+                const onClickInfo = () => {
+                    if (enEdicionVia) setEditandoInfoViaIdx(editandoViaIdx);
+                    else if (enEdicionCombi) setEditandoInfoCombiIdx(editandoCombinacionIdx);
+                    else if (esCreandoCombinacion) setMostrarModalInfoCombi(true);
+                    else setMostrarModalInfo(true);
+                };
+                return (
+                    <div style={{ ...st.toolsBar, background: (enEdicionVia || enEdicionCombi) ? (esCombi ? '#f5eef8' : '#fff8e1') : esCombi ? '#f5eef8' : undefined }}>
+                        {(enEdicionVia || enEdicionCombi) && (
+                            <div style={{ fontSize: '0.82rem', color: esCombi ? '#6c3483' : '#856404', fontWeight: 'bold', marginBottom: 6 }}>
+                                Editando {esCombi ? 'combinación' : 'vía'}: <b>{nombreActivo}</b> — arrastra puntos existentes o usa las herramientas para añadir
+                            </div>
+                        )}
+                        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'center' }}>
+                            <ToolBtn h="PAN" act={herramienta} set={setHerramienta} icon={<Move size={16} />} text="Mover" color="#34495e" />
+                            <ToolBtn h="INICIO" act={herramienta} set={setHerramienta} icon={<MapPin size={16} />} text="Inicio" color="#e74c3c" />
+                            <ToolBtn h="INTERMEDIO" act={herramienta} set={setHerramienta} icon={<MousePointer2 size={16} />} text="P.Intermedio" color="#f39c12" />
+                            <ToolBtn h="FIN" act={herramienta} set={setHerramienta} icon={<CheckCircle size={16} />} text="Fin" color="#2ecc71" />
+                            <ToolBtn h="GRADO" act={herramienta} set={setHerramienta} icon={<Type size={16} />} text="Grado" color="#9b59b6" />
+                            <ToolBtn h="TEXTO" act={herramienta} set={setHerramienta} icon={<Edit size={16} />} text="Texto" color="#3498db" />
+                            <div style={{ width: 2, background: '#bdc3c7', margin: '0 5px' }} />
+                            <button
+                                onClick={onClickInfo}
+                                style={{ ...st.btnInfo, border: nombreActivo ? '2px solid #2ecc71' : '2px solid #e74c3c' }}>
+                                <Info size={18} /> {esCombi ? 'Info Combinación' : 'Info de la Vía'}
+                            </button>
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginTop: 8, flexWrap: 'wrap' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                                <span style={{ fontSize: '0.78rem', color: '#7f8c8d', fontWeight: 'bold' }}>Color:</span>
+                                {COLORES.map(c => (
+                                    <div key={c} onClick={() => setColor(c)}
+                                        style={{ width: 24, height: 24, borderRadius: '50%', background: c, cursor: 'pointer', border: colorActivo === c ? '3px solid #2c3e50' : '2px solid white', boxShadow: colorActivo === c ? '0 0 0 2px #2c3e50' : '0 1px 4px rgba(0,0,0,0.2)', transform: colorActivo === c ? 'scale(1.25)' : 'scale(1)' }} />
+                                ))}
+                            </div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                <span style={{ fontSize: '0.78rem', color: '#7f8c8d', fontWeight: 'bold' }}>Grosor:</span>
+                                <input type="range" min="1" max="14" value={grosorActivo}
+                                    onChange={e => setGrosor(parseInt(e.target.value))}
+                                    style={{ width: 90, accentColor: colorActivo }} />
+                                <span style={{ fontSize: '0.8rem', fontWeight: 'bold', color: '#2c3e50', minWidth: 18 }}>{grosorActivo}</span>
+                            </div>
+                        </div>
+                        {herramienta !== 'PAN' && (
+                            <div style={{ fontSize: '0.85rem', color: '#e74c3c', fontWeight: 'bold', marginTop: 6 }}>
+                                Clic en la imagen para añadir: {herramienta}
+                            </div>
+                        )}
                     </div>
-                    {/* Paleta de colores + grosor */}
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginTop: 8, flexWrap: 'wrap' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                            <span style={{ fontSize: '0.78rem', color: '#7f8c8d', fontWeight: 'bold' }}>Color:</span>
-                            {COLORES.map(c => (
-                                <div key={c} onClick={() => setViaActual(p => ({ ...p, color: c }))}
-                                    style={{ width: 24, height: 24, borderRadius: '50%', background: c, cursor: 'pointer', border: viaActual.color === c ? '3px solid #2c3e50' : '2px solid white', boxShadow: viaActual.color === c ? '0 0 0 2px #2c3e50' : '0 1px 4px rgba(0,0,0,0.2)', transform: viaActual.color === c ? 'scale(1.25)' : 'scale(1)' }} />
-                            ))}
-                        </div>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                            <span style={{ fontSize: '0.78rem', color: '#7f8c8d', fontWeight: 'bold' }}>Grosor:</span>
-                            <input type="range" min="1" max="14" value={viaActual.grosor || 4}
-                                onChange={e => setViaActual(p => ({ ...p, grosor: parseInt(e.target.value) }))}
-                                style={{ width: 90, accentColor: viaActual.color }} />
-                            <span style={{ fontSize: '0.8rem', fontWeight: 'bold', color: '#2c3e50', minWidth: 18 }}>{viaActual.grosor || 4}</span>
-                        </div>
-                    </div>
-                    {herramienta !== 'PAN' && (
-                        <div style={{ fontSize: '0.85rem', color: '#e74c3c', fontWeight: 'bold', marginTop: 6 }}>
-                            Clic en la imagen para añadir: {herramienta}
-                        </div>
-                    )}
-                </div>
-            )}
+                );
+            })()}
 
             {/* BARRA HERRAMIENTAS DE FORMAS (siempre visible) */}
             {!creando && editandoViaIdx === null && (
@@ -719,34 +888,9 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
                 </div>
             )}
 
-            {/* BARRA HERRAMIENTAS (editando) */}
-            {editandoViaIdx !== null && (
-                <div style={{ ...st.toolsBar, background: '#fff3cd', padding: '10px 20px' }}>
-                    <div style={{ color: '#856404', fontWeight: 'bold', fontSize: '0.9rem', marginBottom: 8 }}>
-                        Editando: <b>{vias[editandoViaIdx]?.info.nombre}</b> — Arrastra los puntos · Pulsa × para eliminarlos
-                    </div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                        <span style={{ fontSize: '0.78rem', fontWeight: 'bold', color: '#856404' }}>Grosor:</span>
-                        <input type="range" min="1" max="14"
-                            value={vias[editandoViaIdx]?.grosor || 4}
-                            onChange={e => {
-                                const g = parseInt(e.target.value);
-                                setVias(prev => {
-                                    const copia = [...prev];
-                                    copia[editandoViaIdx] = { ...copia[editandoViaIdx], grosor: g };
-                                    return copia;
-                                });
-                            }}
-                            style={{ width: 100, accentColor: vias[editandoViaIdx]?.color }} />
-                        <span style={{ fontSize: '0.82rem', fontWeight: 'bold', minWidth: 18, color: '#856404' }}>{vias[editandoViaIdx]?.grosor || 4}</span>
-                    </div>
-                </div>
-            )}
-
             {/* VISOR */}
             <div
                 ref={contenedorRef}
-                onWheel={handleWheel}
                 onPointerDown={handlePointerDown}
                 onPointerMove={handlePointerMove}
                 onPointerUp={handlePointerUp}
@@ -774,60 +918,131 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
                         {vias.map((via, idx) => {
                             const dir = via.inicio && via.fin ? via.fin.y - via.inicio.y : -1;
                             const interOrd = [...via.intermedios].sort((a, b) => dir < 0 ? b.y - a.y : a.y - b.y);
-                            const pts = [via.inicio, ...interOrd, via.fin].filter(Boolean);
+                            const pts = [via.inicio, ...interOrd, via.fin].filter(Boolean)
+                                .map(p => ({ x: p.x * xRatio, y: p.y * yRatio }));
                             const isEditing = editandoViaIdx === idx;
+                            const ix = via.inicio ? via.inicio.x * xRatio : 0;
+                            const iy = via.inicio ? via.inicio.y * yRatio : 0;
+                            const fx = via.fin ? via.fin.x * xRatio : 0;
+                            const fy = via.fin ? via.fin.y * yRatio : 0;
                             return (
                                 <g key={via.id}>
                                     <path d={generarCurvaSuave(pts)} fill="none" stroke="black" strokeWidth={(via.grosor || 4) + 2} opacity="0.4" />
                                     <path d={generarCurvaSuave(pts)} fill="none" stroke={via.color} strokeWidth={via.grosor || 4} strokeLinecap="round" strokeLinejoin="round" />
-                                    {via.textos.map((txt, tIdx) => isEditing
-                                ? <TextoEditable key={tIdx} txt={txt} color={via.color}
-                                    onMove={(nx, ny) => setVias(prev => {
-                                        const c = [...prev];
-                                        const textos = [...c[idx].textos];
-                                        textos[tIdx] = { ...textos[tIdx], x: nx, y: ny };
-                                        c[idx] = { ...c[idx], textos };
-                                        return c;
+                                    {via.textos.map((txt, tIdx) => {
+                                        const stxt = { ...txt, x: txt.x * xRatio, y: txt.y * yRatio };
+                                        return isEditing
+                                            ? <TextoEditable key={tIdx} txt={stxt} color={via.color}
+                                                onMove={(nx, ny) => setVias(prev => {
+                                                    const c = [...prev];
+                                                    const textos = [...c[idx].textos];
+                                                    textos[tIdx] = { ...textos[tIdx], x: nx / xRatio, y: ny / yRatio };
+                                                    c[idx] = { ...c[idx], textos };
+                                                    return c;
+                                                })}
+                                                onDelete={() => setVias(prev => {
+                                                    const c = [...prev];
+                                                    c[idx] = { ...c[idx], textos: c[idx].textos.filter((_, i) => i !== tIdx) };
+                                                    return c;
+                                                })}
+                                                contenedorRef={contenedorRef} pan={pan} scale={scale} />
+                                            : <TextoSvg key={tIdx} txt={stxt} color={via.color} />;
                                     })}
-                                    onDelete={() => setVias(prev => {
-                                        const c = [...prev];
-                                        c[idx] = { ...c[idx], textos: c[idx].textos.filter((_, i) => i !== tIdx) };
-                                        return c;
-                                    })}
-                                    contenedorRef={contenedorRef} pan={pan} scale={scale} />
-                                : <TextoSvg key={tIdx} txt={txt} color={via.color} />
-                            )}
                                     {via.inicio && (
                                         <>
-                                            <circle cx={via.inicio.x} cy={via.inicio.y + 20} r="15" fill={via.color} />
-                                            <text x={via.inicio.x} y={via.inicio.y + 25} fill="white" fontSize="16" fontWeight="bold" textAnchor="middle">{idx + 1}</text>
+                                            <circle cx={ix} cy={iy + 20} r="15" fill={via.color} />
+                                            <text x={ix} y={iy + 25} fill="white" fontSize="16" fontWeight="bold" textAnchor="middle">{idx + 1}</text>
                                         </>
                                     )}
                                     {via.fin && (
                                         <>
-                                            <circle cx={via.fin.x} cy={via.fin.y} r="18" fill="none" stroke={via.color} strokeWidth="4" opacity="0.6" />
-                                            <circle cx={via.fin.x} cy={via.fin.y} r="11" fill={via.color} stroke="white" strokeWidth="2.5" />
-                                            <text x={via.fin.x} y={via.fin.y + 5} fill="white" fontSize="13" fontWeight="bold" textAnchor="middle">✓</text>
+                                            <circle cx={fx} cy={fy} r="18" fill="none" stroke={via.color} strokeWidth="4" opacity="0.6" />
+                                            <circle cx={fx} cy={fy} r="11" fill={via.color} stroke="white" strokeWidth="2.5" />
+                                            <text x={fx} y={fy + 5} fill="white" fontSize="13" fontWeight="bold" textAnchor="middle">✓</text>
                                         </>
                                     )}
                                     {isEditing && (
                                         <>
                                             {via.inicio && (
-                                                <PuntoEditable x={via.inicio.x} y={via.inicio.y} color="#e74c3c"
-                                                    onMove={(x, y) => moverPuntoVia(idx, 'inicio', null, x, y)}
+                                                <PuntoEditable x={ix} y={iy} color="#e74c3c"
+                                                    onMove={(x, y) => moverPuntoVia(idx, 'inicio', null, x / xRatio, y / yRatio)}
                                                     onDelete={() => eliminarPuntoVia(idx, 'inicio', null)}
                                                     contenedorRef={contenedorRef} pan={pan} scale={scale} />
                                             )}
                                             {via.intermedios.map((p, pIdx) => (
-                                                <PuntoEditable key={pIdx} x={p.x} y={p.y} color="#f39c12"
-                                                    onMove={(x, y) => moverPuntoVia(idx, 'intermedio', pIdx, x, y)}
+                                                <PuntoEditable key={pIdx} x={p.x * xRatio} y={p.y * yRatio} color="#f39c12"
+                                                    onMove={(x, y) => moverPuntoVia(idx, 'intermedio', pIdx, x / xRatio, y / yRatio)}
                                                     onDelete={() => eliminarPuntoVia(idx, 'intermedio', pIdx)}
                                                     contenedorRef={contenedorRef} pan={pan} scale={scale} />
                                             ))}
                                             {via.fin && (
-                                                <PuntoEditable x={via.fin.x} y={via.fin.y} color="#2ecc71"
-                                                    onMove={(x, y) => moverPuntoVia(idx, 'fin', null, x, y)}
+                                                <PuntoEditable x={fx} y={fy} color="#2ecc71"
+                                                    onMove={(x, y) => moverPuntoVia(idx, 'fin', null, x / xRatio, y / yRatio)}
                                                     onDelete={() => eliminarPuntoVia(idx, 'fin', null)}
+                                                    contenedorRef={contenedorRef} pan={pan} scale={scale} />
+                                            )}
+                                        </>
+                                    )}
+                                </g>
+                            );
+                        })}
+
+                        {/* Combinaciones */}
+                        {combinaciones.map((combi, idx) => {
+                            const letra = String.fromCharCode(65 + idx);
+                            const dir = combi.inicio && combi.fin ? combi.fin.y - combi.inicio.y : -1;
+                            const interOrd = [...combi.intermedios].sort((a, b) => dir < 0 ? b.y - a.y : a.y - b.y);
+                            const pts = [combi.inicio, ...interOrd, combi.fin].filter(Boolean)
+                                .map(p => ({ x: p.x * xRatio, y: p.y * yRatio }));
+                            const isEditing = editandoCombinacionIdx === idx;
+                            const ix = combi.inicio ? combi.inicio.x * xRatio : 0;
+                            const iy = combi.inicio ? combi.inicio.y * yRatio : 0;
+                            const fx = combi.fin ? combi.fin.x * xRatio : 0;
+                            const fy = combi.fin ? combi.fin.y * yRatio : 0;
+                            return (
+                                <g key={combi.id}>
+                                    <path d={generarCurvaSuave(pts)} fill="none" stroke="black" strokeWidth={(combi.grosor || 4) + 2} opacity="0.4" strokeDasharray="10,6" />
+                                    <path d={generarCurvaSuave(pts)} fill="none" stroke={combi.color} strokeWidth={combi.grosor || 4} strokeLinecap="round" strokeLinejoin="round" strokeDasharray="10,6" />
+                                    {combi.textos.map((txt, tIdx) => {
+                                        const stxt = { ...txt, x: txt.x * xRatio, y: txt.y * yRatio };
+                                        return isEditing
+                                            ? <TextoEditable key={tIdx} txt={stxt} color={combi.color}
+                                                onMove={(nx, ny) => setCombinaciones(prev => { const c = [...prev]; const ts = [...c[idx].textos]; ts[tIdx] = { ...ts[tIdx], x: nx / xRatio, y: ny / yRatio }; c[idx] = { ...c[idx], textos: ts }; return c; })}
+                                                onDelete={() => setCombinaciones(prev => { const c = [...prev]; c[idx] = { ...c[idx], textos: c[idx].textos.filter((_, i) => i !== tIdx) }; return c; })}
+                                                contenedorRef={contenedorRef} pan={pan} scale={scale} />
+                                            : <TextoSvg key={tIdx} txt={stxt} color={combi.color} />;
+                                    })}
+                                    {combi.inicio && (
+                                        <>
+                                            <rect x={ix - 14} y={iy + 6} width={28} height={22} rx={5} fill={combi.color} />
+                                            <text x={ix} y={iy + 22} fill="white" fontSize="15" fontWeight="bold" textAnchor="middle">{letra}</text>
+                                        </>
+                                    )}
+                                    {combi.fin && (
+                                        <>
+                                            <circle cx={fx} cy={fy} r="18" fill="none" stroke={combi.color} strokeWidth="4" opacity="0.6" strokeDasharray="5,3" />
+                                            <circle cx={fx} cy={fy} r="11" fill={combi.color} stroke="white" strokeWidth="2.5" />
+                                            <text x={fx} y={fy + 5} fill="white" fontSize="13" fontWeight="bold" textAnchor="middle">✓</text>
+                                        </>
+                                    )}
+                                    {isEditing && (
+                                        <>
+                                            {combi.inicio && (
+                                                <PuntoEditable x={ix} y={iy} color="#e74c3c"
+                                                    onMove={(x, y) => moverPuntoCombinacion(idx, 'inicio', null, x / xRatio, y / yRatio)}
+                                                    onDelete={() => eliminarPuntoCombinacion(idx, 'inicio', null)}
+                                                    contenedorRef={contenedorRef} pan={pan} scale={scale} />
+                                            )}
+                                            {combi.intermedios.map((p, pIdx) => (
+                                                <PuntoEditable key={pIdx} x={p.x * xRatio} y={p.y * yRatio} color="#f39c12"
+                                                    onMove={(x, y) => moverPuntoCombinacion(idx, 'intermedio', pIdx, x / xRatio, y / yRatio)}
+                                                    onDelete={() => eliminarPuntoCombinacion(idx, 'intermedio', pIdx)}
+                                                    contenedorRef={contenedorRef} pan={pan} scale={scale} />
+                                            ))}
+                                            {combi.fin && (
+                                                <PuntoEditable x={fx} y={fy} color="#2ecc71"
+                                                    onMove={(x, y) => moverPuntoCombinacion(idx, 'fin', null, x / xRatio, y / yRatio)}
+                                                    onDelete={() => eliminarPuntoCombinacion(idx, 'fin', null)}
                                                     contenedorRef={contenedorRef} pan={pan} scale={scale} />
                                             )}
                                         </>
@@ -839,10 +1054,10 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
                         {/* Formas (rect, elipse, texto libre) */}
                         {formas.map(f => (
                             <g key={f.id}>
-                                {f.tipo === 'RECT' && <rect x={f.x} y={f.y} width={f.w} height={f.h} fill="none" stroke={f.color} strokeWidth={f.grosor} />}
-                                {f.tipo === 'ELIPSE' && <ellipse cx={f.x + f.w/2} cy={f.y + f.h/2} rx={f.w/2} ry={f.h/2} fill="none" stroke={f.color} strokeWidth={f.grosor} />}
+                                {f.tipo === 'RECT' && <rect x={f.x * xRatio} y={f.y * yRatio} width={f.w * xRatio} height={f.h * yRatio} fill="none" stroke={f.color} strokeWidth={f.grosor} />}
+                                {f.tipo === 'ELIPSE' && <ellipse cx={(f.x + f.w/2) * xRatio} cy={(f.y + f.h/2) * yRatio} rx={f.w/2 * xRatio} ry={f.h/2 * yRatio} fill="none" stroke={f.color} strokeWidth={f.grosor} />}
                                 {f.tipo === 'TEXTO_LIBRE' && (
-                                    <text x={f.x} y={f.y} fill={f.color} fontSize={f.fontSize || 20} fontWeight="bold"
+                                    <text x={f.x * xRatio} y={f.y * yRatio} fill={f.color} fontSize={f.fontSize || 20} fontWeight="bold"
                                         stroke="black" strokeWidth="2" paintOrder="stroke">{f.text}</text>
                                 )}
                             </g>
@@ -850,42 +1065,74 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
 
                         {/* Preview forma en curso */}
                         {dibujando && herramientaForma === 'RECT' && (
-                            <rect x={dibujando.x} y={dibujando.y} width={dibujando.w} height={dibujando.h}
+                            <rect x={dibujando.x * xRatio} y={dibujando.y * yRatio} width={dibujando.w * xRatio} height={dibujando.h * yRatio}
                                 fill="none" stroke={colorForma} strokeWidth={grosorForma} strokeDasharray="6,3" />
                         )}
                         {dibujando && herramientaForma === 'ELIPSE' && (
-                            <ellipse cx={dibujando.x + dibujando.w/2} cy={dibujando.y + dibujando.h/2}
-                                rx={dibujando.w/2} ry={dibujando.h/2}
+                            <ellipse cx={(dibujando.x + dibujando.w/2) * xRatio} cy={(dibujando.y + dibujando.h/2) * yRatio}
+                                rx={dibujando.w/2 * xRatio} ry={dibujando.h/2 * yRatio}
                                 fill="none" stroke={colorForma} strokeWidth={grosorForma} strokeDasharray="6,3" />
+                        )}
+
+                        {esCreandoCombinacion && (
+                            <g>
+                                <path d={generarCurvaSuave(puntosCombinacionActual.map(p => ({ x: p.x * xRatio, y: p.y * yRatio })))} fill="none" stroke={combinacionActual.color} strokeWidth={combinacionActual.grosor || 4} strokeDasharray="10,6" />
+                                {combinacionActual.inicio && (
+                                    <PuntoEditable
+                                        x={combinacionActual.inicio.x * xRatio} y={combinacionActual.inicio.y * yRatio} color="#e74c3c"
+                                        onMove={(x, y) => setCombinacionActual(p => ({ ...p, inicio: { x: x / xRatio, y: y / yRatio } }))}
+                                        onDelete={() => setCombinacionActual(p => ({ ...p, inicio: null }))}
+                                        contenedorRef={contenedorRef} pan={pan} scale={scale} />
+                                )}
+                                {combinacionActual.intermedios.map((p, i) => (
+                                    <PuntoEditable key={i} x={p.x * xRatio} y={p.y * yRatio} color="#f39c12"
+                                        onMove={(x, y) => setCombinacionActual(prev => { const intermedios = [...prev.intermedios]; intermedios[i] = { x: x / xRatio, y: y / yRatio }; return { ...prev, intermedios }; })}
+                                        onDelete={() => setCombinacionActual(prev => ({ ...prev, intermedios: prev.intermedios.filter((_, idx) => idx !== i) }))}
+                                        contenedorRef={contenedorRef} pan={pan} scale={scale} />
+                                ))}
+                                {combinacionActual.fin && (
+                                    <>
+                                        <circle cx={combinacionActual.fin.x * xRatio} cy={combinacionActual.fin.y * yRatio} r="20" fill="none" stroke={combinacionActual.color} strokeWidth="3" strokeDasharray="4,3" opacity="0.7" />
+                                        <PuntoEditable
+                                            x={combinacionActual.fin.x * xRatio} y={combinacionActual.fin.y * yRatio} color="#2ecc71"
+                                            onMove={(x, y) => setCombinacionActual(p => ({ ...p, fin: { x: x / xRatio, y: y / yRatio } }))}
+                                            onDelete={() => setCombinacionActual(p => ({ ...p, fin: null }))}
+                                            contenedorRef={contenedorRef} pan={pan} scale={scale} />
+                                    </>
+                                )}
+                            </g>
                         )}
 
                         {creando && (
                             <g>
-                                <path d={generarCurvaSuave(puntosViaActual)} fill="none" stroke={viaActual.color} strokeWidth={viaActual.grosor || 4} strokeDasharray="8,8" />
-                                {viaActual.textos.map((txt, tIdx) => (
-                                    <TextoEditable key={tIdx} txt={txt} color={viaActual.color}
-                                        onMove={(nx, ny) => setViaActual(prev => {
-                                            const textos = [...prev.textos];
-                                            textos[tIdx] = { ...textos[tIdx], x: nx, y: ny };
-                                            return { ...prev, textos };
-                                        })}
-                                        onDelete={() => setViaActual(prev => ({
-                                            ...prev, textos: prev.textos.filter((_, i) => i !== tIdx)
-                                        }))}
-                                        contenedorRef={contenedorRef} pan={pan} scale={scale} />
-                                ))}
+                                <path d={generarCurvaSuave(puntosViaActual.map(p => ({ x: p.x * xRatio, y: p.y * yRatio })))} fill="none" stroke={viaActual.color} strokeWidth={viaActual.grosor || 4} strokeDasharray="8,8" />
+                                {viaActual.textos.map((txt, tIdx) => {
+                                    const stxt = { ...txt, x: txt.x * xRatio, y: txt.y * yRatio };
+                                    return (
+                                        <TextoEditable key={tIdx} txt={stxt} color={viaActual.color}
+                                            onMove={(nx, ny) => setViaActual(prev => {
+                                                const textos = [...prev.textos];
+                                                textos[tIdx] = { ...textos[tIdx], x: nx / xRatio, y: ny / yRatio };
+                                                return { ...prev, textos };
+                                            })}
+                                            onDelete={() => setViaActual(prev => ({
+                                                ...prev, textos: prev.textos.filter((_, i) => i !== tIdx)
+                                            }))}
+                                            contenedorRef={contenedorRef} pan={pan} scale={scale} />
+                                    );
+                                })}
                                 {viaActual.inicio && (
                                     <PuntoEditable
-                                        x={viaActual.inicio.x} y={viaActual.inicio.y} color="#e74c3c"
-                                        onMove={(x, y) => setViaActual(p => ({ ...p, inicio: { x, y } }))}
+                                        x={viaActual.inicio.x * xRatio} y={viaActual.inicio.y * yRatio} color="#e74c3c"
+                                        onMove={(x, y) => setViaActual(p => ({ ...p, inicio: { x: x / xRatio, y: y / yRatio } }))}
                                         onDelete={() => setViaActual(p => ({ ...p, inicio: null }))}
                                         contenedorRef={contenedorRef} pan={pan} scale={scale} />
                                 )}
                                 {viaActual.intermedios.map((p, i) => (
-                                    <PuntoEditable key={i} x={p.x} y={p.y} color="#f39c12"
+                                    <PuntoEditable key={i} x={p.x * xRatio} y={p.y * yRatio} color="#f39c12"
                                         onMove={(x, y) => setViaActual(prev => {
                                             const intermedios = [...prev.intermedios];
-                                            intermedios[i] = { x, y };
+                                            intermedios[i] = { x: x / xRatio, y: y / yRatio };
                                             return { ...prev, intermedios };
                                         })}
                                         onDelete={() => setViaActual(prev => ({
@@ -895,10 +1142,10 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
                                 ))}
                                 {viaActual.fin && (
                                     <>
-                                        <circle cx={viaActual.fin.x} cy={viaActual.fin.y} r="20" fill="none" stroke={viaActual.color} strokeWidth="3" strokeDasharray="4,3" opacity="0.7" />
+                                        <circle cx={viaActual.fin.x * xRatio} cy={viaActual.fin.y * yRatio} r="20" fill="none" stroke={viaActual.color} strokeWidth="3" strokeDasharray="4,3" opacity="0.7" />
                                         <PuntoEditable
-                                            x={viaActual.fin.x} y={viaActual.fin.y} color="#2ecc71"
-                                            onMove={(x, y) => setViaActual(p => ({ ...p, fin: { x, y } }))}
+                                            x={viaActual.fin.x * xRatio} y={viaActual.fin.y * yRatio} color="#2ecc71"
+                                            onMove={(x, y) => setViaActual(p => ({ ...p, fin: { x: x / xRatio, y: y / yRatio } }))}
                                             onDelete={() => setViaActual(p => ({ ...p, fin: null }))}
                                             contenedorRef={contenedorRef} pan={pan} scale={scale} />
                                     </>
@@ -946,7 +1193,7 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
                                         <td style={st.td}>
                                             <div style={{ display: 'flex', gap: 6 }}>
                                                 <button onClick={() => { setEditandoInfoViaIdx(i); }} style={st.btnAccion} title="Editar información">ℹ️</button>
-                                                <button onClick={() => { setEditandoViaIdx(i); setCreando(false); }} style={st.btnAccion} title="Editar puntos">✏️</button>
+                                                <button onClick={() => { setEditandoViaIdx(i); setCreando(false); setEsCreandoCombinacion(false); setHerramienta('PAN'); }} style={st.btnAccion} title="Editar puntos">✏️</button>
                                                 <button onClick={() => eliminarVia(i)} style={st.btnAccion} title="Eliminar vía">🗑️</button>
                                             </div>
                                         </td>
@@ -954,6 +1201,43 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
                                 ))}
                             </tbody>
                         </table>
+                    </div>
+                )}
+                {combinaciones.length > 0 && (
+                    <div style={{ marginTop: 16 }}>
+                        <div style={{ fontWeight: 'bold', color: '#6c3483', fontSize: '0.9rem', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
+                            <span style={{ background: '#8e44ad', color: 'white', borderRadius: 5, padding: '1px 8px', fontSize: '0.8rem' }}>Combinaciones</span>
+                        </div>
+                        <div style={{ overflowX: 'auto' }}>
+                            <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 500 }}>
+                                <thead>
+                                    <tr style={{ background: '#f5eef8', color: '#6c3483', textAlign: 'left' }}>
+                                        <th style={st.th}>Letra</th>
+                                        <th style={st.th}>Nombre</th>
+                                        <th style={st.th}>Grado</th>
+                                        <th style={st.th}>Color</th>
+                                        <th style={st.th}>Acciones</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {combinaciones.map((c, i) => (
+                                        <tr key={c.id} style={{ borderBottom: '1px solid #e8daef', background: editandoCombinacionIdx === i ? '#f5eef8' : 'white' }}>
+                                            <td style={{ ...st.td, fontWeight: 'bold', color: '#8e44ad' }}>{String.fromCharCode(65 + i)}</td>
+                                            <td style={st.td}>{c.info.nombre}</td>
+                                            <td style={{ ...st.td, fontWeight: 'bold', color: '#8e44ad' }}>{c.info.grado || '-'}</td>
+                                            <td style={st.td}><div style={{ width: 20, height: 20, borderRadius: '50%', background: c.color }} /></td>
+                                            <td style={st.td}>
+                                                <div style={{ display: 'flex', gap: 6 }}>
+                                                    <button onClick={() => { setEditandoInfoCombiIdx(i); }} style={st.btnAccion} title="Editar información">ℹ️</button>
+                                                    <button onClick={() => { setEditandoCombinacionIdx(i); setCreando(false); setEsCreandoCombinacion(false); setHerramienta('PAN'); }} style={st.btnAccion} title="Editar puntos">✏️</button>
+                                                    <button onClick={() => eliminarCombinacion(i)} style={st.btnAccion} title="Eliminar combinación">🗑️</button>
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
                     </div>
                 )}
             </div>
@@ -1038,6 +1322,7 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
                                     textos: p.textos.map(t => t.type === 'grado' ? { ...t, text: v } : t)
                                 }))} />
                             </div>
+                            <InputModal label="Número en la pared" value={viaActual.info.numero} onChange={v => setViaActual(p => ({ ...p, info: { ...p.info, numero: v } }))} ph="Ej: 7a (deja vacío para numeración automática)" />
                             <InputModal label="Equipador/a" value={viaActual.info.equipador} onChange={v => setViaActual(p => ({ ...p, info: { ...p.info, equipador: v } }))} ph="Nombre de quien equipó" />
                             <InputModal label="Año" value={viaActual.info.anio} onChange={v => setViaActual(p => ({ ...p, info: { ...p.info, anio: v } }))} type="number" ph="Ej: 2018" />
                             <label style={st.label}>Información adicional</label>
@@ -1085,17 +1370,23 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
                         </div>
                         <div style={st.modalBody}>
                             <GradeSelector value={gradoTemp} onChange={setGradoTemp} />
+                            <div style={{ marginTop: 14 }}>
+                                <label style={{ ...st.label, display: 'block', marginBottom: 6 }}>Tamaño texto: {gradoFontSize}px</label>
+                                <input type="range" min="10" max="40" value={gradoFontSize} onChange={e => setGradoFontSize(Number(e.target.value))} style={{ width: '100%' }} />
+                            </div>
                             <button
                                 onClick={() => {
                                     if (gradoTemp) {
-                                        setViaActual(prev => ({
-                                            ...prev,
-                                            info: { ...prev.info, grado: gradoTemp },
-                                            textos: [
-                                                ...prev.textos.filter(t => t.type !== 'grado'),
-                                                { text: gradoTemp, x: modalGradoPos.x, y: modalGradoPos.y, type: 'grado' }
-                                            ]
-                                        }));
+                                        const nuevoTextoGrado = { text: gradoTemp, x: modalGradoPos.x, y: modalGradoPos.y, type: 'grado', fontSize: gradoFontSize };
+                                        if (editandoViaIdx !== null) {
+                                            setVias(prev => { const c = [...prev]; c[editandoViaIdx] = { ...c[editandoViaIdx], info: { ...c[editandoViaIdx].info, grado: gradoTemp }, textos: [...c[editandoViaIdx].textos.filter(t => t.type !== 'grado'), nuevoTextoGrado] }; return c; });
+                                        } else if (editandoCombinacionIdx !== null) {
+                                            setCombinaciones(prev => { const c = [...prev]; c[editandoCombinacionIdx] = { ...c[editandoCombinacionIdx], info: { ...c[editandoCombinacionIdx].info, grado: gradoTemp }, textos: [...c[editandoCombinacionIdx].textos.filter(t => t.type !== 'grado'), nuevoTextoGrado] }; return c; });
+                                        } else if (esCreandoCombinacion) {
+                                            setCombinacionActual(prev => ({ ...prev, info: { ...prev.info, grado: gradoTemp }, textos: [...prev.textos.filter(t => t.type !== 'grado'), nuevoTextoGrado] }));
+                                        } else {
+                                            setViaActual(prev => ({ ...prev, info: { ...prev.info, grado: gradoTemp }, textos: [...prev.textos.filter(t => t.type !== 'grado'), nuevoTextoGrado] }));
+                                        }
                                     }
                                     setModalGradoPos(null);
                                 }}
@@ -1120,12 +1411,24 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
                             <input autoFocus value={textoModalValor} onChange={e => setTextoModalValor(e.target.value)}
                                 placeholder="Ej: paso difícil, reunión…" style={st.input}
                                 onKeyDown={e => { if (e.key === 'Enter' && textoModalValor.trim()) {
-                                    setViaActual(prev => ({ ...prev, textos: [...prev.textos, { text: textoModalValor.trim(), x: textoModalPos.x, y: textoModalPos.y, type: 'texto' }] }));
+                                    const t = { text: textoModalValor.trim(), x: textoModalPos.x, y: textoModalPos.y, type: 'texto', fontSize: textoModalFontSize };
+                                    if (editandoViaIdx !== null) setVias(prev => { const c = [...prev]; c[editandoViaIdx] = { ...c[editandoViaIdx], textos: [...c[editandoViaIdx].textos, t] }; return c; });
+                                    else if (editandoCombinacionIdx !== null) setCombinaciones(prev => { const c = [...prev]; c[editandoCombinacionIdx] = { ...c[editandoCombinacionIdx], textos: [...c[editandoCombinacionIdx].textos, t] }; return c; });
+                                    else if (esCreandoCombinacion) setCombinacionActual(prev => ({ ...prev, textos: [...prev.textos, t] }));
+                                    else setViaActual(prev => ({ ...prev, textos: [...prev.textos, t] }));
                                     setTextoModalPos(null);
                                 }}} />
+                            <div style={{ marginTop: 14 }}>
+                                <label style={{ ...st.label, display: 'block', marginBottom: 6 }}>Tamaño texto: {textoModalFontSize}px</label>
+                                <input type="range" min="10" max="60" value={textoModalFontSize} onChange={e => setTextoModalFontSize(Number(e.target.value))} style={{ width: '100%' }} />
+                            </div>
                             <button onClick={() => {
                                 if (textoModalValor.trim()) {
-                                    setViaActual(prev => ({ ...prev, textos: [...prev.textos, { text: textoModalValor.trim(), x: textoModalPos.x, y: textoModalPos.y, type: 'texto' }] }));
+                                    const t = { text: textoModalValor.trim(), x: textoModalPos.x, y: textoModalPos.y, type: 'texto', fontSize: textoModalFontSize };
+                                    if (editandoViaIdx !== null) setVias(prev => { const c = [...prev]; c[editandoViaIdx] = { ...c[editandoViaIdx], textos: [...c[editandoViaIdx].textos, t] }; return c; });
+                                    else if (editandoCombinacionIdx !== null) setCombinaciones(prev => { const c = [...prev]; c[editandoCombinacionIdx] = { ...c[editandoCombinacionIdx], textos: [...c[editandoCombinacionIdx].textos, t] }; return c; });
+                                    else if (esCreandoCombinacion) setCombinacionActual(prev => ({ ...prev, textos: [...prev.textos, t] }));
+                                    else setViaActual(prev => ({ ...prev, textos: [...prev.textos, t] }));
                                 }
                                 setTextoModalPos(null);
                             }} style={{ ...st.btnPrimario, width: '100%', marginTop: 14, justifyContent: 'center' }}>
@@ -1192,6 +1495,10 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
                                     })}
                                 />
                             </div>
+                            <InputModal label="Número en la pared"
+                                value={vias[editandoInfoViaIdx].info?.numero || ''}
+                                onChange={v => setVias(prev => { const c = [...prev]; c[editandoInfoViaIdx] = { ...c[editandoInfoViaIdx], info: { ...c[editandoInfoViaIdx].info, numero: v } }; return c; })}
+                                ph="Ej: 7a (deja vacío para numeración automática)" />
                             <InputModal label="Equipador/a"
                                 value={vias[editandoInfoViaIdx].info?.equipador || ''}
                                 onChange={v => setVias(prev => { const c = [...prev]; c[editandoInfoViaIdx] = { ...c[editandoInfoViaIdx], info: { ...c[editandoInfoViaIdx].info, equipador: v } }; return c; })}
@@ -1211,10 +1518,74 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
                 </div>
             )}
 
+            {/* MODAL: Info combinación en creación */}
+            {mostrarModalInfoCombi && (
+                <div style={st.overlayModal}>
+                    <div style={st.modal}>
+                        <div style={st.modalHeader}>
+                            <h3>Datos de la Combinación</h3>
+                            <button onClick={() => setMostrarModalInfoCombi(false)} style={st.btnClose}><X size={20} /></button>
+                        </div>
+                        <div style={st.modalBody}>
+                            <InputModal label="Nombre *" value={combinacionActual.info.nombre} onChange={v => setCombinacionActual(p => ({ ...p, info: { ...p.info, nombre: v } }))} ph="Ej: AB, Integral…" />
+                            <div style={{ marginBottom: 15 }}>
+                                <label style={st.label}>Grado propuesto</label>
+                                <GradeSelector value={combinacionActual.info.grado} onChange={v => setCombinacionActual(p => ({ ...p, info: { ...p.info, grado: v }, textos: p.textos.map(t => t.type === 'grado' ? { ...t, text: v } : t) }))} />
+                            </div>
+                            <InputModal label="Equipador/a" value={combinacionActual.info.equipador} onChange={v => setCombinacionActual(p => ({ ...p, info: { ...p.info, equipador: v } }))} ph="Nombre de quien equipó" />
+                            <InputModal label="Año" value={combinacionActual.info.anio} onChange={v => setCombinacionActual(p => ({ ...p, info: { ...p.info, anio: v } }))} type="number" ph="Ej: 2018" />
+                            <label style={st.label}>Información adicional</label>
+                            <textarea value={combinacionActual.info.info} onChange={e => setCombinacionActual(p => ({ ...p, info: { ...p.info, info: e.target.value } }))}
+                                style={{ ...st.input, height: 80, resize: 'none' }} placeholder="Descripción de la combinación…" />
+                            <button onClick={() => setMostrarModalInfoCombi(false)} style={{ ...st.btnPrimario, width: '100%', marginTop: 15 }}>Guardar</button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* MODAL: Editar info de combinación existente */}
+            {editandoInfoCombiIdx !== null && combinaciones[editandoInfoCombiIdx] && (
+                <div style={st.overlayModal}>
+                    <div style={st.modal}>
+                        <div style={st.modalHeader}>
+                            <h3>Datos Combinación {String.fromCharCode(65 + editandoInfoCombiIdx)}</h3>
+                            <button onClick={() => setEditandoInfoCombiIdx(null)} style={st.btnClose}><X size={20} /></button>
+                        </div>
+                        <div style={st.modalBody}>
+                            <InputModal label="Nombre *"
+                                value={combinaciones[editandoInfoCombiIdx].info?.nombre || ''}
+                                onChange={v => setCombinaciones(prev => { const c = [...prev]; c[editandoInfoCombiIdx] = { ...c[editandoInfoCombiIdx], info: { ...c[editandoInfoCombiIdx].info, nombre: v } }; return c; })}
+                                ph="Ej: AB, Integral…" />
+                            <div style={{ marginBottom: 15 }}>
+                                <label style={st.label}>Grado</label>
+                                <GradeSelector
+                                    value={combinaciones[editandoInfoCombiIdx].info?.grado || ''}
+                                    onChange={v => setCombinaciones(prev => { const c = [...prev]; c[editandoInfoCombiIdx] = { ...c[editandoInfoCombiIdx], info: { ...c[editandoInfoCombiIdx].info, grado: v }, textos: c[editandoInfoCombiIdx].textos.map(t => t.type === 'grado' ? { ...t, text: v } : t) }; return c; })}
+                                />
+                            </div>
+                            <InputModal label="Equipador/a"
+                                value={combinaciones[editandoInfoCombiIdx].info?.equipador || ''}
+                                onChange={v => setCombinaciones(prev => { const c = [...prev]; c[editandoInfoCombiIdx] = { ...c[editandoInfoCombiIdx], info: { ...c[editandoInfoCombiIdx].info, equipador: v } }; return c; })}
+                                ph="Nombre de quien equipó" />
+                            <InputModal label="Año"
+                                value={combinaciones[editandoInfoCombiIdx].info?.anio || ''}
+                                onChange={v => setCombinaciones(prev => { const c = [...prev]; c[editandoInfoCombiIdx] = { ...c[editandoInfoCombiIdx], info: { ...c[editandoInfoCombiIdx].info, anio: v } }; return c; })}
+                                type="number" ph="Ej: 2018" />
+                            <label style={st.label}>Información adicional</label>
+                            <textarea
+                                value={combinaciones[editandoInfoCombiIdx].info?.info || ''}
+                                onChange={e => { const v = e.target.value; setCombinaciones(prev => { const c = [...prev]; c[editandoInfoCombiIdx] = { ...c[editandoInfoCombiIdx], info: { ...c[editandoInfoCombiIdx].info, info: v } }; return c; }); }}
+                                style={{ ...st.input, height: 80, resize: 'none' }} placeholder="Descripción de la combinación…" />
+                            <button onClick={() => setEditandoInfoCombiIdx(null)} style={{ ...st.btnPrimario, width: '100%', marginTop: 15 }}>Guardar</button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
             {/* MODAL: Impresión */}
             {mostrarImpresion && (
                 <ModalImpresion
-                    croquis={{ ...{infoCroquis, vias, formas, imagenUrl} }}
+                    croquis={{ infoCroquis, vias, formas, combinaciones, imagenUrl, srcW: foto.srcW, srcH: foto.srcH }}
                     onClose={() => setMostrarImpresion(false)}
                 />
             )}
@@ -1319,6 +1690,8 @@ function TextoEditable({ txt, color, onMove, onDelete, contenedorRef, pan, scale
     };
     const handlePointerUp = (e) => { e.stopPropagation(); setDragging(false); };
 
+    const fs = txt.fontSize || (isGrado ? 14 : 18);
+    const hw = fs + 6, hh = Math.ceil(fs * 0.9);
     return (
         <g>
             <g transform={`translate(${txt.x}, ${txt.y})`}
@@ -1326,19 +1699,19 @@ function TextoEditable({ txt, color, onMove, onDelete, contenedorRef, pan, scale
                 onPointerDown={handlePointerDown} onPointerMove={handlePointerMove} onPointerUp={handlePointerUp}>
                 {isGrado ? (
                     <>
-                        <rect x="-22" y="-14" width="44" height="28" rx="4" fill="white" stroke={color} strokeWidth="2" />
-                        <text x="0" y="5" fill={color} fontSize="14" fontWeight="bold" textAnchor="middle">{txt.text}</text>
+                        <rect x={-hw} y={-hh} width={hw * 2} height={hh * 2} rx="4" fill="white" stroke={color} strokeWidth="2" />
+                        <text x="0" y={Math.ceil(fs * 0.35)} fill={color} fontSize={fs} fontWeight="bold" textAnchor="middle">{txt.text}</text>
                     </>
                 ) : (
                     <>
-                        <text x="0" y="0" fill="white" stroke="black" strokeWidth="3" fontSize="18" fontWeight="bold" paintOrder="stroke">{txt.text}</text>
-                        <text x="0" y="0" fill="white" fontSize="18" fontWeight="bold">{txt.text}</text>
+                        <text x="0" y="0" fill="white" stroke="black" strokeWidth="3" fontSize={fs} fontWeight="bold" paintOrder="stroke">{txt.text}</text>
+                        <text x="0" y="0" fill="white" fontSize={fs} fontWeight="bold">{txt.text}</text>
                     </>
                 )}
             </g>
             <g onClick={(e) => { e.stopPropagation(); onDelete(); }} style={{ cursor: 'pointer' }}>
-                <circle cx={txt.x + (isGrado ? 22 : 60)} cy={txt.y - 10} r={8} fill="#e74c3c" />
-                <text x={txt.x + (isGrado ? 22 : 60)} y={txt.y - 6} textAnchor="middle" fill="white" fontSize="12" fontWeight="bold">×</text>
+                <circle cx={txt.x + (isGrado ? hw : fs * 3)} cy={txt.y - 10} r={8} fill="#e74c3c" />
+                <text x={txt.x + (isGrado ? hw : fs * 3)} y={txt.y - 6} textAnchor="middle" fill="white" fontSize="12" fontWeight="bold">×</text>
             </g>
         </g>
     );
@@ -1396,14 +1769,16 @@ const ToolBtn = ({ h, act, set, icon, text, color }) => (
 
 const TextoSvg = ({ txt, color }) => {
     const isGrado = txt.type === 'grado';
+    const fs = txt.fontSize || (isGrado ? 14 : 18);
+    const hw = fs + 6, hh = Math.ceil(fs * 0.9);
     return (
         <g transform={`translate(${txt.x}, ${txt.y})`}>
             {isGrado ? (
-                <><rect x="-20" y="-12" width="40" height="24" rx="4" fill="white" stroke={color} strokeWidth="2" />
-                    <text x="0" y="4" fill={color} fontSize="14" fontWeight="bold" textAnchor="middle">{txt.text}</text></>
+                <><rect x={-hw} y={-hh} width={hw * 2} height={hh * 2} rx="4" fill="white" stroke={color} strokeWidth="2" />
+                    <text x="0" y={Math.ceil(fs * 0.35)} fill={color} fontSize={fs} fontWeight="bold" textAnchor="middle">{txt.text}</text></>
             ) : (
-                <><text x="0" y="0" fill="white" stroke="black" strokeWidth="3" fontSize="18" fontWeight="bold" paintOrder="stroke">{txt.text}</text>
-                    <text x="0" y="0" fill="white" fontSize="18" fontWeight="bold">{txt.text}</text></>
+                <><text x="0" y="0" fill="white" stroke="black" strokeWidth="3" fontSize={fs} fontWeight="bold" paintOrder="stroke">{txt.text}</text>
+                    <text x="0" y="0" fill="white" fontSize={fs} fontWeight="bold">{txt.text}</text></>
             )}
         </g>
     );

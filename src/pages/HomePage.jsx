@@ -1,8 +1,8 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import { collection, getDocs, deleteDoc, doc } from 'firebase/firestore';
-import { Search, Plus, LogIn, LogOut, Layers, Mountain } from 'lucide-react';
+import { Search, Plus, LogIn, LogOut, Layers, Mountain, User } from 'lucide-react';
 import logo from '../assets/logotopoclimbing.png';
 import EscuelaModal from '../components/EscuelaModal';
 import NotificacionesCampana from '../components/NotificacionesCampana';
@@ -62,7 +62,17 @@ function RecenterMap({ coords }) {
     return null;
 }
 
-export default function HomePage({ onCrearCroquis, onVerCroquis }) {
+function FlyToEscuela({ escuelas, escuelaId }) {
+    const map = useMap();
+    useEffect(() => {
+        if (!escuelaId || !escuelas.length) return;
+        const e = escuelas.find(e => e.id === escuelaId);
+        if (e?.lat && e?.lng) map.flyTo([e.lat, e.lng], 14, { duration: 1.5 });
+    }, [escuelaId, escuelas]); // eslint-disable-line
+    return null;
+}
+
+export default function HomePage({ onCrearCroquis, onVerCroquis, onVerPerfil, escuelaIdDestacada }) {
     const { usuario, cerrarSesion, setModalAuth } = useAuth();
     const [croquis, setCroquis] = useState([]);
     const [busqueda, setBusqueda] = useState('');
@@ -73,6 +83,16 @@ export default function HomePage({ onCrearCroquis, onVerCroquis }) {
     const [mostrarModalEscuela, setMostrarModalEscuela] = useState(false);
     const [escuelaEditando, setEscuelaEditando] = useState(null);
     const [vistaActiva, setVistaActiva] = useState('croquis'); // 'croquis' | 'escuelas'
+    const markerEscuelaRef = useRef(null);
+
+    // Cuando llega un deep link de escuela, cambiar a la pestaña de escuelas y abrir popup
+    useEffect(() => {
+        if (!escuelaIdDestacada) return;
+        setVistaActiva('escuelas');
+        // Abrir popup después de que el mapa renderice los marcadores
+        const t = setTimeout(() => markerEscuelaRef.current?.openPopup(), 1800);
+        return () => clearTimeout(t);
+    }, [escuelaIdDestacada, escuelas]);
 
     const cargarCroquis = useCallback(async () => {
         setCargando(true);
@@ -171,8 +191,8 @@ export default function HomePage({ onCrearCroquis, onVerCroquis }) {
                                     if (c) onVerCroquis(c);
                                 }}
                             />
-                            <div style={st.avatarCircle}>{(usuario.displayName || usuario.email)[0].toUpperCase()}</div>
-                            <span style={st.usuarioNombre}>{usuario.displayName || usuario.email}</span>
+                            <button onClick={onVerPerfil} style={{ ...st.btnSalir, color: 'rgba(255,255,255,0.85)' }} title="Mi perfil"><User size={18} /></button>
+                            <div style={{ ...st.avatarCircle, cursor: 'pointer' }} onClick={onVerPerfil}>{(usuario.displayName || usuario.email)[0].toUpperCase()}</div>
                             <button onClick={cerrarSesion} style={st.btnSalir} title="Cerrar sesión"><LogOut size={16} /></button>
                         </div>
                     ) : (
@@ -213,12 +233,18 @@ export default function HomePage({ onCrearCroquis, onVerCroquis }) {
                         </Marker>
                     ))}
                     {escuelas.filter(e => e.lat && e.lng).map(e => (
-                        <Marker key={`e-${e.id}`} position={[e.lat, e.lng]} icon={iconoEscuela}>
+                        <Marker
+                            key={`e-${e.id}`}
+                            position={[e.lat, e.lng]}
+                            icon={iconoEscuela}
+                            ref={e.id === escuelaIdDestacada ? markerEscuelaRef : undefined}
+                        >
                             <Popup maxWidth={300} minWidth={240}>
                                 <PopupEscuela escuela={e} croquis={croquis} onCrearCroquis={onCrearCroquis} />
                             </Popup>
                         </Marker>
                     ))}
+                    <FlyToEscuela escuelas={escuelas} escuelaId={escuelaIdDestacada} />
                 </MapContainer>
             </div>
 
@@ -341,7 +367,7 @@ function PopupEscuela({ escuela, croquis, onCrearCroquis }) {
             <div style={{ fontSize: '0.8rem', color: '#27ae60', fontWeight: 'bold', marginBottom: 8 }}>
                 {sectores.length} sector{sectores.length !== 1 ? 'es' : ''} con croquis
             </div>
-            <button onClick={onCrearCroquis}
+            <button onClick={() => onCrearCroquis(escuela.nombre)}
                 style={{ width: '100%', padding: '8px', background: '#27ae60', color: 'white', border: 'none', borderRadius: 8, fontWeight: 'bold', cursor: 'pointer', fontSize: '0.9rem' }}>
                 + Añadir sector
             </button>
@@ -351,6 +377,15 @@ function PopupEscuela({ escuela, croquis, onCrearCroquis }) {
 
 function TarjetaEscuela({ escuela, numSectores, onCrearCroquis, onEditar, onEliminar, usuario }) {
     const esMio = usuario?.uid === escuela.creadoPor;
+    const [copiado, setCopiado] = useState(false);
+    const compartir = (e) => {
+        e.stopPropagation();
+        const url = `${window.location.origin}${window.location.pathname}#/escuela/${escuela.id}`;
+        navigator.clipboard.writeText(url).then(() => {
+            setCopiado(true);
+            setTimeout(() => setCopiado(false), 2000);
+        });
+    };
     return (
         <div style={{ ...st.tarjeta, border: '2px solid #eafaf1' }}>
             <div style={{ ...st.tarjetaImg, background: '#eafaf1', position: 'relative' }}>
@@ -358,6 +393,10 @@ function TarjetaEscuela({ escuela, numSectores, onCrearCroquis, onEditar, onElim
                     ? <img src={escuela.imagenUrl} alt={escuela.nombre} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
                     : <div style={st.tarjetaImgPlaceholder}>⛰️</div>}
                 <div style={{ ...st.tarjetaBadge, background: 'rgba(39,174,96,0.85)' }}>{numSectores} sector{numSectores !== 1 ? 'es' : ''}</div>
+                <button onClick={compartir} title="Copiar enlace"
+                    style={{ ...st.btnEliminarTarjeta, position: 'absolute', bottom: 8, left: 8, background: copiado ? 'rgba(39,174,96,0.85)' : 'rgba(0,0,0,0.55)', fontSize: '0.75rem', padding: '4px 8px' }}>
+                    {copiado ? '✓ Copiado' : '🔗'}
+                </button>
                 {esMio && (
                     <div style={{ position: 'absolute', top: 8, left: 8, display: 'flex', gap: 4 }}>
                         <button onClick={e => { e.stopPropagation(); onEditar(); }} style={st.btnEliminarTarjeta} title="Editar escuela">✏️</button>
@@ -368,7 +407,7 @@ function TarjetaEscuela({ escuela, numSectores, onCrearCroquis, onEditar, onElim
             <div style={st.tarjetaInfo}>
                 <div style={{ ...st.tarjetaTitulo, color: '#27ae60' }}>{escuela.nombre}</div>
                 {escuela.descripcion && <div style={{ ...st.tarjetaEscuela, fontSize: '0.8rem' }}>{escuela.descripcion.slice(0, 80)}{escuela.descripcion.length > 80 ? '…' : ''}</div>}
-                <button onClick={onCrearCroquis}
+                <button onClick={() => onCrearCroquis(escuela.nombre)}
                     style={{ marginTop: 8, padding: '6px 12px', background: '#27ae60', color: 'white', border: 'none', borderRadius: 6, fontWeight: 'bold', cursor: 'pointer', fontSize: '0.8rem' }}>
                     + Añadir sector
                 </button>
@@ -388,6 +427,15 @@ function InfoChip({ icon, label }) {
 function TarjetaCroquis({ croquis, onVer, onEliminar, usuario }) {
     const info = croquis.infoCroquis || {};
     const esMio = usuario?.uid === croquis.creadoPor;
+    const [copiado, setCopiado] = useState(false);
+    const compartir = (e) => {
+        e.stopPropagation();
+        const url = `${window.location.origin}${window.location.pathname}#/croquis/${croquis.id}`;
+        navigator.clipboard.writeText(url).then(() => {
+            setCopiado(true);
+            setTimeout(() => setCopiado(false), 2000);
+        });
+    };
     return (
         <div style={{ ...st.tarjeta, position: 'relative' }}>
             <div style={st.tarjetaImg} onClick={onVer}>
@@ -395,6 +443,10 @@ function TarjetaCroquis({ croquis, onVer, onEliminar, usuario }) {
                     ? <img src={croquis.imagenUrl} alt={info.sector} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
                     : <div style={st.tarjetaImgPlaceholder}>🏔️</div>}
                 <div style={st.tarjetaBadge}>{croquis.vias?.length || 0} vías</div>
+                <button onClick={compartir} title="Copiar enlace"
+                    style={{ ...st.btnEliminarTarjeta, position: 'absolute', bottom: 8, left: 8, background: copiado ? 'rgba(39,174,96,0.85)' : 'rgba(0,0,0,0.55)', fontSize: '0.75rem', padding: '4px 8px' }}>
+                    {copiado ? '✓ Copiado' : '🔗'}
+                </button>
                 {esMio && (
                     <button
                         onClick={e => { e.stopPropagation(); onEliminar(); }}
