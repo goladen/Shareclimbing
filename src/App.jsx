@@ -70,7 +70,7 @@ export default function App() {
             <AuthModal />
             {pantalla.name === 'home' && (
                 <HomePage
-                    onCrearCroquis={(escuelaInicial) => irAEditor(escuelaInicial ? { escuelaInicial } : null)}
+                    onCrearCroquis={(escuelaInicial) => irAEditor(typeof escuelaInicial === 'string' && escuelaInicial ? { escuelaInicial } : null)}
                     onVerCroquis={irAViewer}
                     onVerPerfil={irAPerfil}
                     escuelaIdDestacada={pantalla.escuelaId}
@@ -94,7 +94,7 @@ export default function App() {
                     onVolver={irAHome}
                     onVerCroquis={irAViewer}
                     onEditarCroquis={irAEditor}
-                    onCrearCroquis={(escuelaInicial) => irAEditor(escuelaInicial ? { escuelaInicial } : null)}
+                    onCrearCroquis={(escuelaInicial) => irAEditor(typeof escuelaInicial === 'string' && escuelaInicial ? { escuelaInicial } : null)}
                 />
             )}
         </AuthProvider>

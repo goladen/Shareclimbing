@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import {
     Camera, Link as LinkIcon, Plus, MapPin,
     Type, Edit, Info, CheckCircle, Move, ZoomIn, ZoomOut,
@@ -106,10 +106,11 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
     const [mostrarModalInfoCombi, setMostrarModalInfoCombi] = useState(false);
     const [editandoInfoCombiIdx, setEditandoInfoCombiIdx] = useState(null);
 
-    const [infoCroquis, setInfoCroquis] = useState(
-        croquisInicial?.infoCroquis
-        || (croquisInicial?.escuelaInicial ? { ...INFO_CROQUIS_INIT, escuela: croquisInicial.escuelaInicial } : INFO_CROQUIS_INIT)
-    );
+    const [infoCroquis, setInfoCroquis] = useState(() => {
+        if (croquisInicial?.infoCroquis) return croquisInicial.infoCroquis;
+        const esc = typeof croquisInicial?.escuelaInicial === 'string' ? croquisInicial.escuelaInicial : '';
+        return esc ? { ...INFO_CROQUIS_INIT, escuela: esc } : INFO_CROQUIS_INIT;
+    });
     const [mostrarModalCroquis, setMostrarModalCroquis] = useState(false);
     const [guardando, setGuardando] = useState(false);
     const [progresoSubida, setProgresoSubida] = useState('');
@@ -208,6 +209,7 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
 
     const procesarImagen = (src) => {
         const img = new Image();
+        const currentFotoIdx = fotoIdx;
         img.onload = () => {
             const nw = img.naturalWidth, nh = img.naturalHeight;
             setImgSize({ w: nw, h: nh });
@@ -215,8 +217,7 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
             const hScale = (window.innerHeight - 200) / nh;
             setScale(Math.min(wScale, hScale, 1) * 0.9);
             setPan({ x: 50, y: 50 });
-            setImagenUrl(src);
-            setFotos(fs => fs.map((f, i) => i === fotoIdx ? { ...f, srcW: nw, srcH: nh } : f));
+            setFotos(fs => fs.map((f, i) => i === currentFotoIdx ? { ...f, imagenUrl: src, srcW: nw, srcH: nh } : f));
         };
         img.src = src;
     };
@@ -387,16 +388,16 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
     };
 
     // ─── VISOR ───
-    const handleWheel = (e) => {
+    const handleWheel = useCallback((e) => {
         e.preventDefault();
         setScale(s => Math.min(Math.max(s * (e.deltaY > 0 ? 0.9 : 1.1), 0.1), 5));
-    };
+    }, []);
     useEffect(() => {
         const el = contenedorRef.current;
         if (!el) return;
         el.addEventListener('wheel', handleWheel, { passive: false });
         return () => el.removeEventListener('wheel', handleWheel);
-    });
+    }); // no deps: re-runs after every render to attach once el is available
 
     const screenToSvg = (clientX, clientY) => {
         const rect = contenedorRef.current.getBoundingClientRect();
@@ -940,6 +941,13 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
                                                     c[idx] = { ...c[idx], textos };
                                                     return c;
                                                 })}
+                                                onRotate={(angle) => setVias(prev => {
+                                                    const c = [...prev];
+                                                    const textos = [...c[idx].textos];
+                                                    textos[tIdx] = { ...textos[tIdx], rotation: angle };
+                                                    c[idx] = { ...c[idx], textos };
+                                                    return c;
+                                                })}
                                                 onDelete={() => setVias(prev => {
                                                     const c = [...prev];
                                                     c[idx] = { ...c[idx], textos: c[idx].textos.filter((_, i) => i !== tIdx) };
@@ -1008,6 +1016,7 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
                                         return isEditing
                                             ? <TextoEditable key={tIdx} txt={stxt} color={combi.color}
                                                 onMove={(nx, ny) => setCombinaciones(prev => { const c = [...prev]; const ts = [...c[idx].textos]; ts[tIdx] = { ...ts[tIdx], x: nx / xRatio, y: ny / yRatio }; c[idx] = { ...c[idx], textos: ts }; return c; })}
+                                                onRotate={(angle) => setCombinaciones(prev => { const c = [...prev]; const ts = [...c[idx].textos]; ts[tIdx] = { ...ts[tIdx], rotation: angle }; c[idx] = { ...c[idx], textos: ts }; return c; })}
                                                 onDelete={() => setCombinaciones(prev => { const c = [...prev]; c[idx] = { ...c[idx], textos: c[idx].textos.filter((_, i) => i !== tIdx) }; return c; })}
                                                 contenedorRef={contenedorRef} pan={pan} scale={scale} />
                                             : <TextoSvg key={tIdx} txt={stxt} color={combi.color} />;
@@ -1077,6 +1086,26 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
                         {esCreandoCombinacion && (
                             <g>
                                 <path d={generarCurvaSuave(puntosCombinacionActual.map(p => ({ x: p.x * xRatio, y: p.y * yRatio })))} fill="none" stroke={combinacionActual.color} strokeWidth={combinacionActual.grosor || 4} strokeDasharray="10,6" />
+                                {(combinacionActual.textos || []).map((txt, tIdx) => {
+                                    const stxt = { ...txt, x: txt.x * xRatio, y: txt.y * yRatio };
+                                    return (
+                                        <TextoEditable key={tIdx} txt={stxt} color={combinacionActual.color}
+                                            onMove={(nx, ny) => setCombinacionActual(prev => {
+                                                const textos = [...prev.textos];
+                                                textos[tIdx] = { ...textos[tIdx], x: nx / xRatio, y: ny / yRatio };
+                                                return { ...prev, textos };
+                                            })}
+                                            onRotate={(angle) => setCombinacionActual(prev => {
+                                                const textos = [...prev.textos];
+                                                textos[tIdx] = { ...textos[tIdx], rotation: angle };
+                                                return { ...prev, textos };
+                                            })}
+                                            onDelete={() => setCombinacionActual(prev => ({
+                                                ...prev, textos: prev.textos.filter((_, i) => i !== tIdx)
+                                            }))}
+                                            contenedorRef={contenedorRef} pan={pan} scale={scale} />
+                                    );
+                                })}
                                 {combinacionActual.inicio && (
                                     <PuntoEditable
                                         x={combinacionActual.inicio.x * xRatio} y={combinacionActual.inicio.y * yRatio} color="#e74c3c"
@@ -1113,6 +1142,11 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
                                             onMove={(nx, ny) => setViaActual(prev => {
                                                 const textos = [...prev.textos];
                                                 textos[tIdx] = { ...textos[tIdx], x: nx / xRatio, y: ny / yRatio };
+                                                return { ...prev, textos };
+                                            })}
+                                            onRotate={(angle) => setViaActual(prev => {
+                                                const textos = [...prev.textos];
+                                                textos[tIdx] = { ...textos[tIdx], rotation: angle };
                                                 return { ...prev, textos };
                                             })}
                                             onDelete={() => setViaActual(prev => ({
@@ -1673,30 +1707,47 @@ function PuntoEditable({ x, y, color, onMove, onDelete, contenedorRef, pan, scal
     );
 }
 
-function TextoEditable({ txt, color, onMove, onDelete, contenedorRef, pan, scale }) {
-    const [dragging, setDragging] = useState(false);
+function TextoEditable({ txt, color, onMove, onRotate, onDelete, contenedorRef, pan, scale }) {
+    const [dragMode, setDragMode] = useState(null); // null | 'move' | 'rotate'
     const isGrado = txt.type === 'grado';
+    const rotation = txt.rotation || 0;
 
-    const handlePointerDown = (e) => {
-        e.stopPropagation();
-        e.currentTarget.setPointerCapture(e.pointerId);
-        setDragging(true);
-    };
-    const handlePointerMove = (e) => {
-        if (!dragging) return;
-        e.stopPropagation();
+    // Rotation handle position: floats above the text following its rotation angle
+    const HANDLE_DIST = 34;
+    const rRad = rotation * Math.PI / 180;
+    const hx = txt.x + HANDLE_DIST * Math.sin(rRad);
+    const hy = txt.y - HANDLE_DIST * Math.cos(rRad);
+
+    const getImgPos = (e) => {
         const rect = contenedorRef.current.getBoundingClientRect();
-        onMove((e.clientX - rect.left - pan.x) / scale, (e.clientY - rect.top - pan.y) / scale);
+        return { x: (e.clientX - rect.left - pan.x) / scale, y: (e.clientY - rect.top - pan.y) / scale };
     };
-    const handlePointerUp = (e) => { e.stopPropagation(); setDragging(false); };
+
+    const onTextDown = (e) => { e.stopPropagation(); e.currentTarget.setPointerCapture(e.pointerId); setDragMode('move'); };
+    const onTextMove = (e) => {
+        if (dragMode !== 'move') return;
+        e.stopPropagation();
+        const { x, y } = getImgPos(e);
+        onMove(x, y);
+    };
+    const onTextUp = (e) => { e.stopPropagation(); setDragMode(null); };
+
+    const onHandleDown = (e) => { e.stopPropagation(); e.currentTarget.setPointerCapture(e.pointerId); setDragMode('rotate'); };
+    const onHandleMove = (e) => {
+        if (dragMode !== 'rotate') return;
+        e.stopPropagation();
+        const { x, y } = getImgPos(e);
+        onRotate(Math.atan2(x - txt.x, -(y - txt.y)) * 180 / Math.PI);
+    };
+    const onHandleUp = (e) => { e.stopPropagation(); setDragMode(null); };
 
     const fs = txt.fontSize || (isGrado ? 14 : 18);
     const hw = fs + 6, hh = Math.ceil(fs * 0.9);
     return (
         <g>
-            <g transform={`translate(${txt.x}, ${txt.y})`}
-                style={{ cursor: 'move' }}
-                onPointerDown={handlePointerDown} onPointerMove={handlePointerMove} onPointerUp={handlePointerUp}>
+            <g transform={`translate(${txt.x}, ${txt.y}) rotate(${rotation})`}
+                style={{ cursor: dragMode === 'move' ? 'grabbing' : 'grab' }}
+                onPointerDown={onTextDown} onPointerMove={onTextMove} onPointerUp={onTextUp}>
                 {isGrado ? (
                     <>
                         <rect x={-hw} y={-hh} width={hw * 2} height={hh * 2} rx="4" fill="white" stroke={color} strokeWidth="2" />
@@ -1709,6 +1760,14 @@ function TextoEditable({ txt, color, onMove, onDelete, contenedorRef, pan, scale
                     </>
                 )}
             </g>
+            {/* Rotation handle */}
+            <line x1={txt.x} y1={txt.y} x2={hx} y2={hy} stroke={color} strokeWidth="1.5" strokeDasharray="3,2" opacity="0.55" style={{ pointerEvents: 'none' }} />
+            <g onPointerDown={onHandleDown} onPointerMove={onHandleMove} onPointerUp={onHandleUp}
+                style={{ cursor: dragMode === 'rotate' ? 'grabbing' : 'crosshair' }}>
+                <circle cx={hx} cy={hy} r={10} fill={color} opacity="0.85" />
+                <text x={hx} y={hy + 5} textAnchor="middle" fill="white" fontSize="13" fontWeight="bold" style={{ pointerEvents: 'none' }}>↻</text>
+            </g>
+            {/* Delete button */}
             <g onClick={(e) => { e.stopPropagation(); onDelete(); }} style={{ cursor: 'pointer' }}>
                 <circle cx={txt.x + (isGrado ? hw : fs * 3)} cy={txt.y - 10} r={8} fill="#e74c3c" />
                 <text x={txt.x + (isGrado ? hw : fs * 3)} y={txt.y - 6} textAnchor="middle" fill="white" fontSize="12" fontWeight="bold">×</text>
@@ -1772,7 +1831,7 @@ const TextoSvg = ({ txt, color }) => {
     const fs = txt.fontSize || (isGrado ? 14 : 18);
     const hw = fs + 6, hh = Math.ceil(fs * 0.9);
     return (
-        <g transform={`translate(${txt.x}, ${txt.y})`}>
+        <g transform={`translate(${txt.x}, ${txt.y}) rotate(${txt.rotation || 0})`}>
             {isGrado ? (
                 <><rect x={-hw} y={-hh} width={hw * 2} height={hh * 2} rx="4" fill="white" stroke={color} strokeWidth="2" />
                     <text x="0" y={Math.ceil(fs * 0.35)} fill={color} fontSize={fs} fontWeight="bold" textAnchor="middle">{txt.text}</text></>

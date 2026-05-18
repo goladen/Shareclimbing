@@ -180,7 +180,7 @@ export default function HomePage({ onCrearCroquis, onVerCroquis, onVerPerfil, es
                     <button onClick={() => setMostrarModalEscuela(true)} style={st.btnEscuela}>
                         <Mountain size={18} /> Nueva escuela
                     </button>
-                    <button onClick={onCrearCroquis} style={st.btnCrear}>
+                    <button onClick={() => onCrearCroquis()} style={st.btnCrear}>
                         <Plus size={18} /> Crear croquis
                     </button>
                     {usuario ? (

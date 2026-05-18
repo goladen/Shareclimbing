@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { ArrowLeft, ZoomIn, ZoomOut, Edit, Info, X, Sun, Calendar, MapPin, AlertTriangle, MessageCircle, Trash2, UserPlus, Users, CheckCircle, XCircle, Shield, Mail, Share2, Printer } from 'lucide-react';
 import ModalImpresion from '../components/ModalImpresion';
 import { db } from '../firebase';
@@ -107,10 +107,10 @@ export default function CroquisViewer({ croquis: croquisProp, onVolver, onEditar
         cargar();
     }, [esAutor, croquis.id]); // eslint-disable-line
 
-    const handleWheel = (e) => {
+    const handleWheel = useCallback((e) => {
         e.preventDefault();
         setScale(s => Math.min(Math.max(s * (e.deltaY > 0 ? 0.9 : 1.1), 0.1), 5));
-    };
+    }, []);
     useEffect(() => {
         const el = contenedorRef.current;
         if (!el) return;
