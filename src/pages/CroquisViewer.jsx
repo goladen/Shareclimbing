@@ -1,10 +1,13 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { ArrowLeft, ZoomIn, ZoomOut, Edit, Info, X, Sun, Calendar, MapPin, AlertTriangle, MessageCircle, Trash2, UserPlus, Users, CheckCircle, XCircle, Shield, Mail, Share2, Printer } from 'lucide-react';
+import { ArrowLeft, ZoomIn, ZoomOut, Edit, Info, X, Sun, Calendar, MapPin, AlertTriangle, MessageCircle, Trash2, UserPlus, Users, CheckCircle, XCircle, Shield, Mail, Share2, Printer, Mountain } from 'lucide-react';
 import ModalImpresion from '../components/ModalImpresion';
 import { db } from '../firebase';
 import { deleteDoc, doc, addDoc, updateDoc, collection, query, where, getDocs, serverTimestamp, arrayUnion, arrayRemove } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
 import ComentariosCroquis from '../components/ComentariosCroquis';
+import { ItinerarioVista } from '../components/ItinerarioMapa';
+import { AsociarEscuelaModal } from '../components/AsociacionEscuela';
+import CompartirViaModal from '../components/CompartirViaModal';
 
 const generarCurvaSuave = (puntos) => {
     if (puntos.length === 0) return "";
@@ -53,6 +56,8 @@ export default function CroquisViewer({ croquis: croquisProp, onVolver, onEditar
     const [enlaceCopiado, setEnlaceCopiado] = useState(false);
     const [mostrarImpresion, setMostrarImpresion] = useState(false);
     const [mostrarCombinaciones, setMostrarCombinaciones] = useState(false);
+    const [mostrarAsociar, setMostrarAsociar] = useState(false);
+    const [viaCompartiendo, setViaCompartiendo] = useState(null);
 
     const contenedorRef = useRef(null);
 
@@ -230,12 +235,16 @@ export default function CroquisViewer({ croquis: croquisProp, onVolver, onEditar
                     <button onClick={onVolver} style={st.btnIcono} title="Volver"><ArrowLeft size={20} /></button>
                     <div>
                         <div style={{ color: 'white', fontWeight: 'bold' }}>{info.escuela || 'Croquis'}</div>
-                        {info.sector && <div style={{ color: 'rgba(255,255,255,0.6)', fontSize: '0.8rem' }}>{info.sector}</div>}
+                        {(info.sector || fotoActual?.nombre) && <div style={{ color: 'rgba(255,255,255,0.6)', fontSize: '0.8rem' }}>{[info.sector, fotoActual?.nombre].filter(Boolean).join(' · ')}</div>}
                     </div>
                 </div>
-                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                    <button onClick={() => setScale(s => s * 1.2)} style={st.btnIcono}><ZoomIn size={18} /></button>
-                    <button onClick={() => setScale(s => s * 0.8)} style={st.btnIcono}><ZoomOut size={18} /></button>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                    {!fotoActual?.soloLista && (
+                        <>
+                            <button onClick={() => setScale(s => s * 1.2)} style={st.btnIcono}><ZoomIn size={18} /></button>
+                            <button onClick={() => setScale(s => s * 0.8)} style={st.btnIcono}><ZoomOut size={18} /></button>
+                        </>
+                    )}
                     {fotos.length > 1 && (
                         <div style={{ display: 'flex', alignItems: 'center', gap: 4, background: 'rgba(255,255,255,0.1)', borderRadius: 8, padding: '3px 6px' }}>
                             <button onClick={() => setFotoIdx(i => Math.max(0, i - 1))} disabled={fotoIdx === 0}
@@ -249,9 +258,11 @@ export default function CroquisViewer({ croquis: croquisProp, onVolver, onEditar
                     <button onClick={() => setMostrarComentarios(true)} style={st.btnIcono} title="Comentarios">
                         <MessageCircle size={18} />
                     </button>
-                    <button onClick={() => setMostrarImpresion(true)} style={st.btnIcono} title="Imprimir / Exportar PNG">
-                        <Printer size={18} />
-                    </button>
+                    {!fotoActual?.soloLista && (
+                        <button onClick={() => setMostrarImpresion(true)} style={st.btnIcono} title="Imprimir / Exportar PNG">
+                            <Printer size={18} />
+                        </button>
+                    )}
                     {combinaciones.length > 0 && (
                         <button
                             onClick={() => setMostrarCombinaciones(v => !v)}
@@ -302,6 +313,14 @@ export default function CroquisViewer({ croquis: croquisProp, onVolver, onEditar
                         </div>
                     )}
 
+                    {/* Autor o editor: asociar a una escuela */}
+                    {puedeEditar && (
+                        <button onClick={() => setMostrarAsociar(true)} style={{ ...st.btnIcono, background: 'rgba(39,174,96,0.45)' }} title="Asociar a una escuela">
+                            <Mountain size={18} />
+                            <span style={{ color: 'white', fontSize: '0.8rem', marginLeft: 4 }}>Escuela</span>
+                        </button>
+                    )}
+
                     {/* Autor o editor: botón editar */}
                     {puedeEditar && (
                         <button onClick={() => onEditar(croquis)} style={{ ...st.btnIcono, background: 'rgba(52,152,219,0.5)' }} title="Editar croquis">
@@ -325,7 +344,23 @@ export default function CroquisViewer({ croquis: croquisProp, onVolver, onEditar
                 </div>
             </div>
 
+            {/* LISTA SIN FOTO */}
+            {fotoActual?.soloLista && (
+                <div style={{ flex: 1, overflowY: 'auto', background: 'white', padding: 16 }}>
+                    {vias.length === 0 && <div style={{ color: '#7f8c8d', fontStyle: 'italic', textAlign: 'center', padding: 15 }}>Esta lista aún no tiene vías.</div>}
+                    {vias.map((v, i) => (
+                        <div key={v.id} onClick={() => setViaSeleccionada({ ...v, num: i + 1 })}
+                            style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 6px', borderBottom: '1px solid #ecf0f1', cursor: 'pointer', color: '#2c3e50' }}>
+                            <span style={{ fontWeight: 'bold', color: v.color, minWidth: 20 }}>{i + 1}</span>
+                            <span style={{ flex: 1 }}>{v.info?.nombre}</span>
+                            {v.info?.grado && <strong style={{ color: '#e74c3c' }}>{v.info.grado}</strong>}
+                        </div>
+                    ))}
+                </div>
+            )}
+
             {/* VISOR */}
+            {!fotoActual?.soloLista && (
             <div
                 ref={contenedorRef}
                 onPointerDown={handlePointerDown}
@@ -421,6 +456,19 @@ export default function CroquisViewer({ croquis: croquisProp, onVolver, onEditar
                     </div>
                 )}
             </div>
+            )}
+
+            {viaCompartiendo && (
+                <CompartirViaModal croquisId={croquis.id} via={viaCompartiendo} onClose={() => setViaCompartiendo(null)} />
+            )}
+
+            {mostrarAsociar && (
+                <AsociarEscuelaModal
+                    croquis={croquis}
+                    onClose={() => setMostrarAsociar(false)}
+                    onAsociado={(escuela) => setCroquis(prev => ({ ...prev, infoCroquis: { ...prev.infoCroquis, escuela } }))}
+                />
+            )}
 
             {/* MODAL: Solicitar edición */}
             {modalSolicitud && (
@@ -565,13 +613,18 @@ export default function CroquisViewer({ croquis: croquisProp, onVolver, onEditar
                             <h3 style={{ margin: 0 }}>{info.sector || info.escuela}</h3>
                             <button onClick={() => setMostrarInfo(false)} style={st.btnClose}><X size={20} /></button>
                         </div>
-                        <div style={st.modalBody}>
+                        <div style={{ ...st.modalBody, maxHeight: '78vh', overflowY: 'auto' }}>
                             {info.escuela && <p><strong>Escuela:</strong> {info.escuela}</p>}
                             {info.horarioSol && <p><Sun size={14} style={{ marginRight: 6 }} />{info.horarioSol}</p>}
                             {info.mejorEpoca && <p><Calendar size={14} style={{ marginRight: 6 }} />{info.mejorEpoca}</p>}
                             {info.acceso && <div style={st.bloque}><strong>Acceso:</strong><p>{info.acceso}</p></div>}
                             {info.restricciones && <div style={{ ...st.bloque, background: '#fef9e7', border: '1px solid #f9ca24' }}><AlertTriangle size={14} /> <strong>Restricciones:</strong><p>{info.restricciones}</p></div>}
                             {info.masInfo && <div style={st.bloque}><strong>Más info:</strong><p>{info.masInfo}</p></div>}
+                            {info.itinerario?.length > 0 && (
+                                <div style={{ marginTop: 12, marginBottom: 12 }}>
+                                    <ItinerarioVista rutas={[{ nombre: 'Itinerario al sector', puntos: info.itinerario }]} alto={230} />
+                                </div>
+                            )}
                             {info.mapsUrl && (
                                 <a href={info.mapsUrl} target="_blank" rel="noreferrer" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, color: '#3498db', fontWeight: 'bold', textDecoration: 'none' }}>
                                     <MapPin size={16} /> Ver en Google Maps
@@ -632,6 +685,12 @@ export default function CroquisViewer({ croquis: croquisProp, onVolver, onEditar
                             <p><strong>Año:</strong> {viaSeleccionada.info?.anio || '–'}</p>
                             {viaSeleccionada.info?.info && (
                                 <div style={st.bloque}><strong>Info técnica:</strong><p style={{ whiteSpace: 'pre-wrap' }}>{viaSeleccionada.info.info}</p></div>
+                            )}
+                            {puedeEditar && !viaSeleccionada.esCombi && (
+                                <button onClick={() => setViaCompartiendo(viaSeleccionada)}
+                                    style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, width: '100%', marginTop: 14, padding: 10, background: '#3498db', color: 'white', border: 'none', borderRadius: 8, fontWeight: 'bold', cursor: 'pointer' }}>
+                                    <Share2 size={16} /> Compartir tarjeta de la vía
+                                </button>
                             )}
                         </div>
                     </div>

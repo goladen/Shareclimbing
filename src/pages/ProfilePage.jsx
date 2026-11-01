@@ -1,14 +1,16 @@
 import React, { useState, useEffect } from 'react';
 import { collection, query, where, getDocs, deleteDoc, doc } from 'firebase/firestore';
-import { ArrowLeft, Plus, Globe, Lock, Edit, Trash2, Bell } from 'lucide-react';
+import { ArrowLeft, Plus, Globe, Lock, Edit, Trash2, Bell, Mountain } from 'lucide-react';
 import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
+import { AsociarEscuelaModal } from '../components/AsociacionEscuela';
 
 export default function ProfilePage({ onVolver, onVerCroquis, onEditarCroquis, onCrearCroquis }) {
     const { usuario } = useAuth();
     const [croquis, setCroquis] = useState([]);
     const [cargando, setCargando] = useState(true);
     const [solicitudesPendientes, setSolicitudesPendientes] = useState(0);
+    const [asociando, setAsociando] = useState(null);
 
     useEffect(() => {
         if (!usuario) return;
@@ -106,11 +108,20 @@ export default function ProfilePage({ onVolver, onVerCroquis, onEditarCroquis, o
                             <TarjetaPerfil key={c.id} croquis={c}
                                 onVer={() => onVerCroquis(c)}
                                 onEditar={() => onEditarCroquis(c)}
+                                onAsociar={() => setAsociando(c)}
                                 onEliminar={() => eliminar(c.id)} />
                         ))}
                     </div>
                 )}
             </div>
+
+            {asociando && (
+                <AsociarEscuelaModal
+                    croquis={asociando}
+                    onClose={() => setAsociando(null)}
+                    onAsociado={(escuela) => setCroquis(prev => prev.map(c => c.id === asociando.id ? { ...c, infoCroquis: { ...c.infoCroquis, escuela } } : c))}
+                />
+            )}
         </div>
     );
 }
@@ -124,7 +135,7 @@ function StatChip({ label, value, color }) {
     );
 }
 
-function TarjetaPerfil({ croquis, onVer, onEditar, onEliminar }) {
+function TarjetaPerfil({ croquis, onVer, onEditar, onEliminar, onAsociar }) {
     const info = croquis.infoCroquis || {};
     const esPublico = !croquis.visibilidad || croquis.visibilidad === 'publico';
     const [copiado, setCopiado] = useState(false);
@@ -171,6 +182,10 @@ function TarjetaPerfil({ croquis, onVer, onEditar, onEliminar }) {
                     <button onClick={onEditar}
                         style={{ flex: 1, padding: '7px', background: '#f39c12', color: 'white', border: 'none', borderRadius: 7, fontWeight: 'bold', cursor: 'pointer', fontSize: '0.82rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4 }}>
                         <Edit size={13} /> Editar
+                    </button>
+                    <button onClick={onAsociar} title="Asociar a una escuela"
+                        style={{ padding: '7px 11px', background: '#27ae60', color: 'white', border: 'none', borderRadius: 7, cursor: 'pointer', display: 'flex', alignItems: 'center' }}>
+                        <Mountain size={14} />
                     </button>
                     <button onClick={onEliminar}
                         style={{ padding: '7px 11px', background: '#e74c3c', color: 'white', border: 'none', borderRadius: 7, cursor: 'pointer' }}>

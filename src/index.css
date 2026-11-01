@@ -5,4 +5,23 @@ body { font-family: 'Segoe UI', Tahoma, sans-serif; }
 .leaflet-container { z-index: 1; }
 
 /* Input placeholder color in dark navbar */
-input::placeholder { color: rgba(255,255,255,0.45); }
+input::placeholder, textarea::placeholder { color: #95a5a6; }
+nav input::placeholder { color: rgba(255,255,255,0.45); }
+
+/* Editor en móvil: filas de herramientas en una sola línea con desplazamiento horizontal */
+.fila-movil { flex-wrap: nowrap !important; justify-content: flex-start !important; overflow-x: auto; }
+.fila-movil > * { flex-shrink: 0; }
+
+/* Página de escuela / sector: rejilla de 12 columnas; en móvil todo a una columna */
+.ep-rejilla { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 16px; max-width: 1280px; margin: 0 auto; align-items: start; }
+.ep-bloque { grid-column: span var(--ep-span, 12); background: white; border-radius: 12px; padding: 16px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); min-width: 0; }
+
+/* Rocódromo: foto y lista de bloques */
+.roc-layout { display: grid; grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr); gap: 16px; max-width: 1280px; margin: 0 auto; align-items: start; }
+
+@media (max-width: 760px) {
+    .roc-layout { grid-template-columns: minmax(0, 1fr); }
+    .ep-bloque { grid-column: span 12; }
+    .ep-croquis { flex-direction: column !important; }
+    .ep-croquis-foto { width: 100% !important; }
+}

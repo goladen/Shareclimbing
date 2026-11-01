@@ -1,9 +1,11 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { X, Mountain, Camera } from 'lucide-react';
 import { db } from '../firebase';
-import { collection, addDoc, doc, updateDoc, serverTimestamp } from 'firebase/firestore';
+import { collection, addDoc, doc, getDocs, updateDoc, serverTimestamp } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
 import LocationPicker from './LocationPicker';
+import { ItinerarioEditor } from './ItinerarioMapa';
+import { normalizarNombre } from '../utils/escuelas';
 import { procesarImagenParaSubir, subirACloudinary, formatearMB, MAX_MB } from '../utils/imagen';
 
 // escuelaEditar: objeto con datos existentes (modo edición), o null (modo creación)
@@ -17,11 +19,37 @@ export default function EscuelaModal({ onClose, onCreada, onEditada, escuelaEdit
     const [lat, setLat] = useState(escuelaEditar?.lat ?? '');
     const [lng, setLng] = useState(escuelaEditar?.lng ?? '');
     const [mapsUrl, setMapsUrl] = useState(escuelaEditar?.mapsUrl || '');
+    const [itinerario, setItinerario] = useState(escuelaEditar?.itinerario || []);
     const [imagenFile, setImagenFile] = useState(null);
     const [imagenPreview, setImagenPreview] = useState(escuelaEditar?.imagenUrl || null);
+    // URL de la imagen cuando no se sube un archivo (pegada o elegida entre las de los sectores)
+    const [imagenUrlElegida, setImagenUrlElegida] = useState(escuelaEditar?.imagenUrl || '');
+    const [croquisVisibles, setCroquisVisibles] = useState([]);
     const [guardando, setGuardando] = useState(false);
     const [progreso, setProgreso] = useState('');
     const [error, setError] = useState('');
+
+    useEffect(() => {
+        getDocs(collection(db, 'croquis_escalada'))
+            .then(snap => setCroquisVisibles(snap.docs.map(d => d.data())
+                .filter(c => !c.visibilidad || c.visibilidad === 'publico' || c.creadoPor === usuario?.uid)))
+            .catch(e => console.error(e));
+    }, []); // eslint-disable-line
+
+    // Fotos de los sectores de esta escuela, sin repetir
+    const fotosSectores = [...new Map(croquisVisibles
+        .filter(c => normalizarNombre(nombre) && normalizarNombre(c.infoCroquis?.escuela) === normalizarNombre(nombre))
+        .flatMap(c => (c.fotos?.length > 0 ? c.fotos : [{ imagenUrl: c.imagenUrl }])
+            .filter(f => f.imagenUrl)
+            .map(f => [f.imagenUrl, { url: f.imagenUrl, sector: c.infoCroquis?.sector || 'Sin sector' }]))
+    ).values()];
+
+    const usarUrl = (url) => {
+        setImagenUrlElegida(url);
+        setImagenFile(null);
+        setImagenPreview(url.trim() || null);
+        setError('');
+    };
 
     const handleImagen = (e) => {
         const file = e.target.files[0];
@@ -33,6 +61,7 @@ export default function EscuelaModal({ onClose, onCreada, onEditada, escuelaEdit
         }
         setError('');
         setImagenFile(file);
+        setImagenUrlElegida('');
         const reader = new FileReader();
         reader.onload = ev => setImagenPreview(ev.target.result);
         reader.readAsDataURL(file);
@@ -40,12 +69,13 @@ export default function EscuelaModal({ onClose, onCreada, onEditada, escuelaEdit
 
     const guardar = async () => {
         if (!nombre.trim()) { setError('El nombre de la escuela es obligatorio.'); return; }
+        if (imagenUrlElegida.trim() && !/^(https?:|data:image\/)/i.test(imagenUrlElegida.trim())) { setError('La URL de la imagen debe empezar por http:// o https://.'); return; }
         if (!usuario) { pedirAuth(() => guardar()); return; }
 
         setGuardando(true);
         setError('');
         try {
-            let imagenUrl = escuelaEditar?.imagenUrl || null; // mantener imagen anterior si no hay nueva
+            let imagenUrl = imagenUrlElegida.trim() || null;
             if (imagenFile) {
                 const resultado = await procesarImagenParaSubir(imagenFile, setProgreso);
                 if (resultado.error) { setError(resultado.error); setGuardando(false); return; }
@@ -61,6 +91,7 @@ export default function EscuelaModal({ onClose, onCreada, onEditada, escuelaEdit
                 lat: lat !== '' ? parseFloat(lat) : null,
                 lng: lng !== '' ? parseFloat(lng) : null,
                 mapsUrl: mapsUrl.trim(),
+                itinerario,
                 imagenUrl,
             };
 
@@ -114,6 +145,21 @@ export default function EscuelaModal({ onClose, onCreada, onEditada, escuelaEdit
                             }
                             <input type="file" accept="image/*" onChange={handleImagen} style={{ display: 'none' }} />
                         </label>
+                        <input value={imagenUrlElegida} onChange={e => usarUrl(e.target.value)}
+                            placeholder="…o pega la URL de una imagen" style={{ ...st.input, marginTop: 8 }} />
+                        {fotosSectores.length > 0 && (
+                            <>
+                                <div style={{ fontSize: '0.8rem', color: '#7f8c8d', margin: '10px 0 6px' }}>…o elige una foto de sus sectores:</div>
+                                <div style={st.galeria}>
+                                    {fotosSectores.map(f => (
+                                        <button key={f.url} type="button" onClick={() => usarUrl(f.url)} title={f.sector}
+                                            style={{ ...st.miniatura, borderColor: imagenUrlElegida === f.url ? '#27ae60' : 'transparent' }}>
+                                            <img src={f.url} alt={f.sector} style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
+                                        </button>
+                                    ))}
+                                </div>
+                            </>
+                        )}
                     </Field>
 
                     <Field label="Acceso">
@@ -133,6 +179,10 @@ export default function EscuelaModal({ onClose, onCreada, onEditada, escuelaEdit
                             lat={lat} lng={lng}
                             onChange={(la, ln) => { setLat(la); setLng(ln); }}
                         />
+                    </Field>
+
+                    <Field label="Itinerario hasta la escuela">
+                        <ItinerarioEditor puntos={itinerario} onChange={setItinerario} lat={lat} lng={lng} />
                     </Field>
 
                     <Field label="Enlace Google Maps (opcional)">
@@ -166,6 +216,8 @@ const st = {
     body: { padding: 24, overflowY: 'auto', flex: 1 },
     input: { width: '100%', padding: '10px 14px', border: '2px solid #ddd', borderRadius: 8, boxSizing: 'border-box', fontSize: '0.95rem', outline: 'none' },
     btnImagen: { display: 'flex', alignItems: 'center', justifyContent: 'center', width: '100%', height: 110, border: '2px dashed #bdc3c7', borderRadius: 10, cursor: 'pointer', overflow: 'hidden', background: '#f8f9fa' },
+    galeria: { display: 'flex', gap: 8, overflowX: 'auto', paddingBottom: 4 },
+    miniatura: { flexShrink: 0, width: 84, height: 64, padding: 0, border: '3px solid', borderRadius: 8, overflow: 'hidden', cursor: 'pointer', background: '#ecf0f1' },
     error: { background: '#fdecea', color: '#c0392b', padding: '10px 14px', borderRadius: 8, marginBottom: 14, fontSize: '0.9rem' },
     btnGuardar: { width: '100%', padding: '13px', background: '#27ae60', color: 'white', border: 'none', borderRadius: 10, fontWeight: 'bold', fontSize: '1rem', cursor: 'pointer', marginTop: 8 },
     progreso: { background: '#eaf4fb', color: '#2980b9', padding: '8px 12px', borderRadius: 8, marginBottom: 10, fontSize: '0.88rem' },

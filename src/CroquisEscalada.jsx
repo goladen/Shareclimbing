@@ -3,13 +3,17 @@ import {
     Camera, Link as LinkIcon, Plus, MapPin,
     Type, Edit, Info, CheckCircle, Move, ZoomIn, ZoomOut,
     X, ArrowLeft, Image as ImageIcon, MousePointer2, Save,
-    Globe, Lock, Layers, Square, Circle, AlignLeft, Printer
+    Globe, Lock, Layers, Square, Circle, AlignLeft, Printer,
+    ChevronUp, ChevronDown, List
 } from 'lucide-react';
 import ModalImpresion from './components/ModalImpresion';
 import { db, auth } from './firebase';
 import { collection, doc, addDoc, updateDoc, getDocs, getDoc, serverTimestamp, arrayUnion } from 'firebase/firestore';
 import { useAuth } from './contexts/AuthContext';
 import LocationPicker from './components/LocationPicker';
+import { ItinerarioEditor } from './components/ItinerarioMapa';
+import CompartirViaModal from './components/CompartirViaModal';
+import { normalizarNombre, notificarAsociacion } from './utils/escuelas';
 import { procesarImagenParaSubir, subirACloudinary, formatearMB, MAX_MB } from './utils/imagen';
 
 const COLORES = ['#e74c3c', '#3498db', '#2ecc71', '#f1c40f', '#9b59b6', '#e67e22', '#1abc9c', '#e84393'];
@@ -32,6 +36,8 @@ const generarCurvaSuave = (puntos) => {
     }
     return path;
 };
+
+const MEDIA_MOVIL = '(max-width: 900px), (max-height: 500px)';
 
 const INFO_CROQUIS_INIT = {
     escuela: '', sector: '', mapsUrl: '', lat: '', lng: '', horarioSol: '',
@@ -116,6 +122,8 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
     const [progresoSubida, setProgresoSubida] = useState('');
     const [editandoViaIdx, setEditandoViaIdx] = useState(null);
     const [escuelasDisponibles, setEscuelasDisponibles] = useState([]);
+    const [sectoresExistentes, setSectoresExistentes] = useState([]);
+    const escuelaGuardada = useRef(normalizarNombre(croquisInicial?.infoCroquis?.escuela));
     const [sectoresDisponibles, setSectoresDisponibles] = useState([]);
     const [mapsEmbedUrl, setMapsEmbedUrl] = useState('');
     const [mostrarModalInfo, setMostrarModalInfo] = useState(false);
@@ -152,6 +160,38 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
     const [mostrarImpresion, setMostrarImpresion] = useState(false);
 
     const contenedorRef = useRef(null);
+    const pulsacion = useRef(null);
+
+    // En móvil la lista de vías y las anotaciones se pliegan para dejar la foto libre
+    const [esMovil, setEsMovil] = useState(() => window.matchMedia(MEDIA_MOVIL).matches);
+    const [panelAbierto, setPanelAbierto] = useState(() => !window.matchMedia(MEDIA_MOVIL).matches);
+    const [mostrarAnotaciones, setMostrarAnotaciones] = useState(false);
+    const [barrasOcultas, setBarrasOcultas] = useState(false);
+    const [viaCompartiendo, setViaCompartiendo] = useState(null);
+
+    useEffect(() => {
+        const mq = window.matchMedia(MEDIA_MOVIL);
+        const actualizar = () => setEsMovil(mq.matches);
+        mq.addEventListener('change', actualizar);
+        return () => mq.removeEventListener('change', actualizar);
+    }, []);
+
+    // Al empezar a dibujar o editar puntos, la lista deja paso a la foto
+    useEffect(() => {
+        if (esMovil && (creando || esCreandoCombinacion || editandoViaIdx !== null || editandoCombinacionIdx !== null)) {
+            setPanelAbierto(false);
+        }
+    }, [esMovil, creando, esCreandoCombinacion, editandoViaIdx, editandoCombinacionIdx]);
+
+    // Ajusta y centra la imagen en el espacio disponible
+    const encuadrarImagen = (nw, nh) => {
+        const rect = contenedorRef.current?.getBoundingClientRect();
+        const ancho = rect?.width || window.innerWidth;
+        const alto = rect?.height || window.innerHeight - 200;
+        const s = Math.min(ancho / nw, alto / nh, 1) * 0.9;
+        setScale(s);
+        setPan({ x: (ancho - nw * s) / 2, y: Math.max(0, (alto - nh * s) / 2) });
+    };
 
     // Actualizar escala/pan al cambiar de foto
     useEffect(() => {
@@ -161,10 +201,7 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
         img.onload = () => {
             const nw = img.naturalWidth, nh = img.naturalHeight;
             setImgSize({ w: nw, h: nh });
-            const wScale = window.innerWidth / nw;
-            const hScale = (window.innerHeight - 200) / nh;
-            setScale(Math.min(wScale, hScale, 1) * 0.9);
-            setPan({ x: 50, y: 50 });
+            encuadrarImagen(nw, nh);
             // Solo guardar srcW/srcH si la foto aún no los tiene (Firestore los trae ya)
             setFotos(fs => fs.map((f, i) => (i === fotoIdx && !f.srcW) ? { ...f, srcW: nw, srcH: nh } : f));
         };
@@ -173,8 +210,11 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
 
     const cargarSugerencias = async () => {
         try {
-            const snap = await getDocs(collection(db, 'croquis_escalada'));
-            const escuelas = new Set();
+            const [snap, snapEscuelas] = await Promise.all([
+                getDocs(collection(db, 'croquis_escalada')),
+                getDocs(collection(db, 'escuelas')),
+            ]);
+            const escuelas = new Set(snapEscuelas.docs.map(d => d.data().nombre?.trim()).filter(Boolean));
             const sectores = new Set();
             snap.docs.forEach(d => {
                 const info = d.data().infoCroquis;
@@ -183,6 +223,9 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
             });
             setEscuelasDisponibles([...escuelas].sort());
             setSectoresDisponibles([...sectores].sort());
+            setSectoresExistentes(snap.docs
+                .filter(d => d.id !== croquísId.current)
+                .map(d => `${normalizarNombre(d.data().infoCroquis?.escuela)}|${normalizarNombre(d.data().infoCroquis?.sector)}`));
         } catch (_) {}
     };
 
@@ -213,13 +256,48 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
         img.onload = () => {
             const nw = img.naturalWidth, nh = img.naturalHeight;
             setImgSize({ w: nw, h: nh });
-            const wScale = window.innerWidth / nw;
-            const hScale = (window.innerHeight - 200) / nh;
-            setScale(Math.min(wScale, hScale, 1) * 0.9);
-            setPan({ x: 50, y: 50 });
+            encuadrarImagen(nw, nh);
             setFotos(fs => fs.map((f, i) => i === currentFotoIdx ? { ...f, imagenUrl: src, srcW: nw, srcH: nh } : f));
         };
         img.src = src;
+    };
+
+    // Lienzo blanco: se trata como una imagen más para dibujar el croquis a mano
+    const crearLienzoBlanco = () => {
+        const canvas = document.createElement('canvas');
+        canvas.width = 1600;
+        canvas.height = 1200;
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        procesarImagen(canvas.toDataURL('image/png'));
+        setImagenEsArchivo(true);
+    };
+
+    const crearSoloLista = () => setFotos(fs => fs.map((f, i) => i === fotoIdx ? { ...f, soloLista: true } : f));
+
+    const anadirViaALista = () => {
+        setVias(prev => [...prev, {
+            id: Date.now(), inicio: null, fin: null, intermedios: [], textos: [],
+            info: { nombre: '', grado: '', equipador: '', info: '', anio: '', numero: '' },
+            color: COLORES[prev.length % COLORES.length], grosor: 4
+        }]);
+        setEditandoInfoViaIdx(vias.length);
+    };
+
+    const moverViaEnLista = (idx, delta) => setVias(prev => {
+        const j = idx + delta;
+        if (j < 0 || j >= prev.length) return prev;
+        const copia = [...prev];
+        [copia[idx], copia[j]] = [copia[j], copia[idx]];
+        return copia;
+    });
+
+    // En una lista sin foto, una vía que se deja sin nombre se descarta
+    const cerrarInfoVia = () => {
+        const idx = editandoInfoViaIdx;
+        if (foto.soloLista && !vias[idx]?.info?.nombre?.trim()) setVias(prev => prev.filter((_, i) => i !== idx));
+        setEditandoInfoViaIdx(null);
     };
 
     const cargarPorUrl = () => {
@@ -236,7 +314,7 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
             const fotosActuales = [...fotos]; // snapshot
             for (let i = 0; i < fotosActuales.length; i++) {
                 const f = fotosActuales[i];
-                if (!f.imagenUrl) continue;
+                if (!f.imagenUrl && !f.soloLista) continue;
                 let urlFinal = f.imagenEsArchivo ? null : f.imagenUrl;
                 if (f.imagenEsArchivo && f.imagenUrl) {
                     setProgresoSubida(`Subiendo foto ${i + 1} de ${fotosActuales.length}…`);
@@ -256,6 +334,8 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
                 fotasGuardadas.push({
                     id: f.id || `f${i}`,
                     imagenUrl: urlFinal,
+                    ...(f.soloLista ? { soloLista: true } : {}),
+                    ...(f.nombre ? { nombre: f.nombre } : {}),
                     srcW: f.srcW || null,
                     srcH: f.srcH || null,
                     vias: (f.vias || []).map(v => ({ id: v.id, inicio: v.inicio, fin: v.fin, intermedios: v.intermedios, textos: v.textos, info: v.info, color: v.color, grosor: v.grosor || 4 })),
@@ -301,6 +381,21 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
                     }
                 }
             }
+            // Si el croquis acaba de entrar en una escuela, avisar a quien la creó
+            const escuelaActual = normalizarNombre(infoCroquis.escuela);
+            if (escuelaActual && escuelaActual !== escuelaGuardada.current && auth.currentUser) {
+                const escSnap = await getDocs(collection(db, 'escuelas'));
+                const escDoc = escSnap.docs.find(d => normalizarNombre(d.data().nombre) === escuelaActual);
+                if (escDoc) {
+                    await notificarAsociacion({
+                        escuela: { id: escDoc.id, ...escDoc.data() },
+                        croquisId: croquísId.current,
+                        infoCroquis,
+                        usuario: auth.currentUser,
+                    });
+                }
+            }
+            escuelaGuardada.current = escuelaActual;
             alert('Croquis guardado');
         } catch (e) {
             setProgresoSubida('');
@@ -360,6 +455,12 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
         setFotoIdx(newIdx);
     };
 
+    const renombrarFoto = () => {
+        const nombre = window.prompt('Nombre de esta foto (vacío para usar el número):', foto.nombre || '');
+        if (nombre === null) return;
+        setFotos(fs => fs.map((f, i) => i === fotoIdx ? { ...f, nombre: nombre.trim() } : f));
+    };
+
     const agregarFoto = () => {
         const nuevaId = `f${Date.now()}`;
         setFotos(prev => [...prev, { id: nuevaId, imagenUrl: null, imagenEsArchivo: false, imagenFile: null, vias: [], formas: [] }]);
@@ -408,6 +509,10 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
     };
 
     const handlePointerDown = (e) => {
+        // Con la lista abierta sobre la foto, el primer toque solo la cierra
+        if (esMovil && panelAbierto) { setPanelAbierto(false); pulsacion.current = null; return; }
+        pulsacion.current = { x: e.clientX, y: e.clientY };
+
         // Herramientas de forma (shapes)
         if (herramientaForma === 'TEXTO_LIBRE') {
             const { x, y } = screenToSvg(e.clientX, e.clientY);
@@ -431,6 +536,10 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
         }
     };
 
+    // Un toque sobre una vía abre sus puntos; si se ha arrastrado, era mover la foto
+    const fueToque = (e) => pulsacion.current
+        && Math.hypot(e.clientX - pulsacion.current.x, e.clientY - pulsacion.current.y) < 8;
+
     const handlePointerMove = (e) => {
         if (dibujando && dibujandoStart.current) {
             const { x, y } = screenToSvg(e.clientX, e.clientY);
@@ -453,6 +562,21 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
         setDibujando(null);
         dibujandoStart.current = null;
         setIsDragging(false);
+    };
+
+    // ─── ABRIR UNA VÍA TOCÁNDOLA EN LA FOTO ───
+    const puedeAbrirTrazado = !creando && !esCreandoCombinacion && !herramientaForma && herramienta === 'PAN';
+
+    const abrirVia = (idx) => {
+        if (!puedeAbrirTrazado || editandoViaIdx === idx) return;
+        setEditandoCombinacionIdx(null);
+        setEditandoViaIdx(idx);
+    };
+
+    const abrirCombinacion = (idx) => {
+        if (!puedeAbrirTrazado || editandoCombinacionIdx === idx) return;
+        setEditandoViaIdx(null);
+        setEditandoCombinacionIdx(idx);
     };
 
     // ─── HERRAMIENTAS DE CREACIÓN / EDICIÓN ───
@@ -590,7 +714,7 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
     };
 
     // ─── RENDER: PANTALLA DE CARGA (foto vacía) ───
-    if (!imagenUrl) {
+    if (!imagenUrl && !foto.soloLista) {
         return (
             <div style={st.containerCarga}>
                 <div style={st.cardCarga}>
@@ -608,6 +732,12 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
                         </label>
                         <button onClick={cargarPorUrl} style={{ ...st.btnCarga, background: '#f39c12' }}>
                             <LinkIcon size={20} /> Cargar desde URL Pública
+                        </button>
+                        <button onClick={crearLienzoBlanco} style={{ ...st.btnCarga, background: '#7f8c8d' }}>
+                            <Square size={20} /> Lienzo en blanco
+                        </button>
+                        <button onClick={crearSoloLista} style={{ ...st.btnCarga, background: '#27ae60' }}>
+                            <List size={20} /> Solo lista de vías
                         </button>
                     </div>
                     {fotos.length > 1 && (
@@ -645,39 +775,50 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
         : [];
 
     const capasPendientes = capas.filter(c => c.estado === 'pendiente');
+    // En móvil la barra superior se desplaza en horizontal: las acciones principales van primero
+    const ordenAccion = esMovil ? { order: -1 } : {};
+    const ocultarBarras = esMovil && barrasOcultas && !foto.soloLista;
 
     // ─── RENDER: EDITOR PRINCIPAL ───
     return (
         <div style={st.appContainer}>
 
+            {/* BARRAS SUPERIORES: en móvil se pueden ocultar para ganar espacio */}
+            <div style={ocultarBarras ? { display: 'none' } : { flexShrink: 0 }}>
             {/* TOPBAR */}
-            <div style={st.topbar}>
+            <div style={esMovil ? { ...st.topbar, flexWrap: 'nowrap', padding: '6px 8px' } : st.topbar}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                    <button onClick={() => imagenUrl ? (onExit ? onExit() : setImagenUrl(null)) : null} style={st.btnIcono} title="Volver">
+                    <button onClick={() => (imagenUrl || foto.soloLista) ? (onExit ? onExit() : setImagenUrl(null)) : null} style={st.btnIcono} title="Volver">
                         <ArrowLeft size={20} />
                     </button>
-                    <div>
+                    <div style={esMovil ? { display: 'none' } : undefined}>
                         <div style={{ color: 'white', fontWeight: 'bold', fontSize: '1rem' }}>
                             {infoCroquis.escuela || 'Mi Croquis'}
                         </div>
                         {infoCroquis.sector && <div style={{ color: 'rgba(255,255,255,0.65)', fontSize: '0.8rem' }}>{infoCroquis.sector}</div>}
                     </div>
                 </div>
-                <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                    <button onClick={() => setScale(s => s * 1.2)} style={st.btnIcono}><ZoomIn size={18} /></button>
-                    <button onClick={() => setScale(s => s * 0.8)} style={st.btnIcono}><ZoomOut size={18} /></button>
-                    <button onClick={() => setMostrarImpresion(true)} style={st.btnIcono} title="Imprimir / Exportar PNG">
-                        <Printer size={18} />
-                    </button>
+                <div className={esMovil ? 'fila-movil' : undefined} style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', ...(esMovil ? { flex: 1, minWidth: 0 } : {}) }}>
+                    {!foto.soloLista && (
+                        <>
+                            <button onClick={() => setScale(s => s * 1.2)} style={st.btnIcono}><ZoomIn size={18} /></button>
+                            <button onClick={() => setScale(s => s * 0.8)} style={st.btnIcono}><ZoomOut size={18} /></button>
+                            <button onClick={() => setMostrarImpresion(true)} style={st.btnIcono} title="Imprimir / Exportar PNG">
+                                <Printer size={18} />
+                            </button>
+                        </>
+                    )}
                     <div style={st.divider} />
 
                     {/* Navegación multi-foto */}
                     <div style={{ display: 'flex', alignItems: 'center', gap: 4, background: 'rgba(255,255,255,0.1)', borderRadius: 8, padding: '4px 8px' }}>
                         <button onClick={() => cambiarFoto(fotoIdx - 1)} disabled={fotoIdx === 0}
                             style={{ ...st.btnIcono, padding: '4px 8px', opacity: fotoIdx === 0 ? 0.4 : 1 }}>◀</button>
-                        <span style={{ color: 'white', fontSize: '0.82rem', fontWeight: 'bold', whiteSpace: 'nowrap' }}>
-                            Foto {fotoIdx + 1}/{fotos.length}
-                        </span>
+                        <button onClick={renombrarFoto} title="Cambiar el nombre de la foto"
+                            style={{ background: 'none', border: 'none', color: 'white', cursor: 'pointer', fontSize: '0.82rem', fontWeight: 'bold', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: 4 }}>
+                            <span style={{ maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis' }}>{foto.nombre || `Foto ${fotoIdx + 1}`}</span>
+                            ({fotoIdx + 1}/{fotos.length}) <Edit size={12} />
+                        </button>
                         <button onClick={() => cambiarFoto(fotoIdx + 1)} disabled={fotoIdx === fotos.length - 1}
                             style={{ ...st.btnIcono, padding: '4px 8px', opacity: fotoIdx === fotos.length - 1 ? 0.4 : 1 }}>▶</button>
                         <button onClick={agregarFoto} title="Añadir otra foto"
@@ -723,7 +864,7 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
 
                     <button
                         onClick={guardarEnFirebase}
-                        style={{ ...st.btnIcono, background: guardando ? 'rgba(46,204,113,0.3)' : 'rgba(46,204,113,0.6)', minWidth: progresoSubida ? 120 : 'auto', fontSize: '0.75rem', gap: 6 }}
+                        style={{ ...st.btnIcono, ...ordenAccion, background: guardando ? 'rgba(46,204,113,0.3)' : 'rgba(46,204,113,0.6)', minWidth: progresoSubida ? 120 : 'auto', fontSize: '0.75rem', gap: 6 }}
                         title={!usuario ? 'Guardar (necesitas registrarte)' : esAjeno ? 'Proponer cambios al propietario' : 'Guardar en la nube'}
                         disabled={guardando}
                     >
@@ -733,29 +874,32 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
                     </button>
 
                     <div style={st.divider} />
-                    {!creando && !esCreandoCombinacion && editandoViaIdx === null && editandoCombinacionIdx === null && (
+                    {foto.soloLista && (
+                        <button onClick={anadirViaALista} style={{ ...st.btnPrimario, ...ordenAccion }}><Plus size={18} /> Nueva Vía</button>
+                    )}
+                    {!foto.soloLista && !creando && !esCreandoCombinacion && editandoViaIdx === null && editandoCombinacionIdx === null && (
                         <>
-                            <button onClick={iniciarNuevaVia} style={st.btnPrimario}><Plus size={18} /> Nueva Vía</button>
+                            <button onClick={iniciarNuevaVia} style={{ ...st.btnPrimario, ...ordenAccion }}><Plus size={18} /> Nueva Vía</button>
                             <button onClick={iniciarNuevaCombinacion} style={{ ...st.btnPrimario, background: 'rgba(142,68,173,0.7)' }}><Plus size={18} /> Combinación</button>
                         </>
                     )}
                     {creando && (
-                        <div style={{ display: 'flex', gap: 8 }}>
+                        <div style={{ display: 'flex', gap: 8, ...ordenAccion }}>
                             <button onClick={() => { setCreando(false); setHerramienta('PAN'); }} style={st.btnPeligro}>Cancelar</button>
                             <button onClick={guardarVia} style={st.btnExito}><CheckCircle size={18} /> Crear Vía</button>
                         </div>
                     )}
                     {esCreandoCombinacion && (
-                        <div style={{ display: 'flex', gap: 8 }}>
+                        <div style={{ display: 'flex', gap: 8, ...ordenAccion }}>
                             <button onClick={() => { setEsCreandoCombinacion(false); setHerramienta('PAN'); }} style={st.btnPeligro}>Cancelar</button>
                             <button onClick={guardarCombinacion} style={{ ...st.btnExito, background: 'rgba(142,68,173,0.8)' }}><CheckCircle size={18} /> Crear Combinación</button>
                         </div>
                     )}
                     {editandoViaIdx !== null && (
-                        <button onClick={() => { setEditandoViaIdx(null); setHerramienta('PAN'); }} style={st.btnExito}><CheckCircle size={18} /> Fin Edición</button>
+                        <button onClick={() => { setEditandoViaIdx(null); setHerramienta('PAN'); }} style={{ ...st.btnExito, ...ordenAccion }}><CheckCircle size={18} /> Fin Edición</button>
                     )}
                     {editandoCombinacionIdx !== null && (
-                        <button onClick={() => { setEditandoCombinacionIdx(null); setHerramienta('PAN'); }} style={{ ...st.btnExito, background: 'rgba(142,68,173,0.8)' }}><CheckCircle size={18} /> Fin Edición</button>
+                        <button onClick={() => { setEditandoCombinacionIdx(null); setHerramienta('PAN'); }} style={{ ...st.btnExito, ...ordenAccion, background: 'rgba(142,68,173,0.8)' }}><CheckCircle size={18} /> Fin Edición</button>
                     )}
                 </div>
             </div>
@@ -804,13 +948,13 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
                     else setMostrarModalInfo(true);
                 };
                 return (
-                    <div style={{ ...st.toolsBar, background: (enEdicionVia || enEdicionCombi) ? (esCombi ? '#f5eef8' : '#fff8e1') : esCombi ? '#f5eef8' : undefined }}>
+                    <div style={{ ...st.toolsBar, background: (enEdicionVia || enEdicionCombi) ? (esCombi ? '#f5eef8' : '#fff8e1') : esCombi ? '#f5eef8' : undefined, ...(esMovil ? { padding: 6, alignItems: 'stretch' } : {}) }}>
                         {(enEdicionVia || enEdicionCombi) && (
                             <div style={{ fontSize: '0.82rem', color: esCombi ? '#6c3483' : '#856404', fontWeight: 'bold', marginBottom: 6 }}>
                                 Editando {esCombi ? 'combinación' : 'vía'}: <b>{nombreActivo}</b> — arrastra puntos existentes o usa las herramientas para añadir
                             </div>
                         )}
-                        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'center' }}>
+                        <div className={esMovil ? 'fila-movil' : undefined} style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'center' }}>
                             <ToolBtn h="PAN" act={herramienta} set={setHerramienta} icon={<Move size={16} />} text="Mover" color="#34495e" />
                             <ToolBtn h="INICIO" act={herramienta} set={setHerramienta} icon={<MapPin size={16} />} text="Inicio" color="#e74c3c" />
                             <ToolBtn h="INTERMEDIO" act={herramienta} set={setHerramienta} icon={<MousePointer2 size={16} />} text="P.Intermedio" color="#f39c12" />
@@ -824,7 +968,7 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
                                 <Info size={18} /> {esCombi ? 'Info Combinación' : 'Info de la Vía'}
                             </button>
                         </div>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginTop: 8, flexWrap: 'wrap' }}>
+                        <div className={esMovil ? 'fila-movil' : undefined} style={{ display: 'flex', alignItems: 'center', gap: 16, marginTop: 8, flexWrap: 'wrap', paddingBottom: 3 }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                                 <span style={{ fontSize: '0.78rem', color: '#7f8c8d', fontWeight: 'bold' }}>Color:</span>
                                 {COLORES.map(c => (
@@ -841,7 +985,7 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
                             </div>
                         </div>
                         {herramienta !== 'PAN' && (
-                            <div style={{ fontSize: '0.85rem', color: '#e74c3c', fontWeight: 'bold', marginTop: 6 }}>
+                            <div style={{ fontSize: '0.85rem', color: '#e74c3c', fontWeight: 'bold', marginTop: 6, textAlign: 'center' }}>
                                 Clic en la imagen para añadir: {herramienta}
                             </div>
                         )}
@@ -850,7 +994,7 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
             })()}
 
             {/* BARRA HERRAMIENTAS DE FORMAS (siempre visible) */}
-            {!creando && editandoViaIdx === null && (
+            {!foto.soloLista && !creando && editandoViaIdx === null && (!esMovil || mostrarAnotaciones) && (
                 <div style={{ ...st.toolsBar, background: '#f0f4f8', padding: '8px 16px' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
                         <span style={{ fontSize: '0.78rem', fontWeight: 'bold', color: '#7f8c8d' }}>Anotaciones:</span>
@@ -889,7 +1033,10 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
                 </div>
             )}
 
+            </div>
+
             {/* VISOR */}
+            {!foto.soloLista && (
             <div
                 ref={contenedorRef}
                 onPointerDown={handlePointerDown}
@@ -905,6 +1052,22 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
                     touchAction: 'none'
                 }}
             >
+                {esMovil && (
+                    <div onPointerDown={e => e.stopPropagation()} style={st.controlesFlotantes}>
+                        <button onClick={() => setBarrasOcultas(o => !o)} style={st.btnFlotante} title={barrasOcultas ? 'Mostrar barras' : 'Ocultar barras'}>
+                            {barrasOcultas ? <ChevronDown size={20} /> : <ChevronUp size={20} />}
+                        </button>
+                        {barrasOcultas && (
+                            <>
+                                <button onClick={() => setScale(s => s * 1.2)} style={st.btnFlotante} title="Acercar"><ZoomIn size={18} /></button>
+                                <button onClick={() => setScale(s => s * 0.8)} style={st.btnFlotante} title="Alejar"><ZoomOut size={18} /></button>
+                                {herramienta !== 'PAN' && (creando || esCreandoCombinacion || editandoViaIdx !== null || editandoCombinacionIdx !== null) && (
+                                    <span style={st.herramientaFlotante}>{herramienta}</span>
+                                )}
+                            </>
+                        )}
+                    </div>
+                )}
                 <div style={{
                     position: 'absolute', transformOrigin: '0 0',
                     transform: `translate(${pan.x}px, ${pan.y}px) scale(${scale})`,
@@ -927,7 +1090,10 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
                             const fx = via.fin ? via.fin.x * xRatio : 0;
                             const fy = via.fin ? via.fin.y * yRatio : 0;
                             return (
-                                <g key={via.id}>
+                                <g key={via.id} onClick={e => { if (fueToque(e)) abrirVia(idx); }}>
+                                    {/* Zona ancha e invisible para poder tocar la línea con el dedo */}
+                                    <path d={generarCurvaSuave(pts)} fill="none" stroke="transparent" strokeWidth={24 / scale}
+                                        style={{ pointerEvents: puedeAbrirTrazado ? 'stroke' : 'none', cursor: 'pointer' }} />
                                     <path d={generarCurvaSuave(pts)} fill="none" stroke="black" strokeWidth={(via.grosor || 4) + 2} opacity="0.4" />
                                     <path d={generarCurvaSuave(pts)} fill="none" stroke={via.color} strokeWidth={via.grosor || 4} strokeLinecap="round" strokeLinejoin="round" />
                                     {via.textos.map((txt, tIdx) => {
@@ -1008,7 +1174,10 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
                             const fx = combi.fin ? combi.fin.x * xRatio : 0;
                             const fy = combi.fin ? combi.fin.y * yRatio : 0;
                             return (
-                                <g key={combi.id}>
+                                <g key={combi.id} onClick={e => { if (fueToque(e)) abrirCombinacion(idx); }}>
+                                    {/* Zona ancha e invisible para poder tocar la línea con el dedo */}
+                                    <path d={generarCurvaSuave(pts)} fill="none" stroke="transparent" strokeWidth={24 / scale}
+                                        style={{ pointerEvents: puedeAbrirTrazado ? 'stroke' : 'none', cursor: 'pointer' }} />
                                     <path d={generarCurvaSuave(pts)} fill="none" stroke="black" strokeWidth={(combi.grosor || 4) + 2} opacity="0.4" strokeDasharray="10,6" />
                                     <path d={generarCurvaSuave(pts)} fill="none" stroke={combi.color} strokeWidth={combi.grosor || 4} strokeLinecap="round" strokeLinejoin="round" strokeDasharray="10,6" />
                                     {combi.textos.map((txt, tIdx) => {
@@ -1189,9 +1358,14 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
                     </svg>
                 </div>
             </div>
+            )}
 
-            {/* PANEL INFERIOR */}
-            <div style={st.panelInferior}>
+            {/* PANEL INFERIOR: en móvil se abre por encima de la foto sin cambiar su tamaño */}
+            <div style={foto.soloLista ? { flex: 1, minHeight: 0, overflowY: 'auto', background: 'white' } : { position: 'relative', zIndex: 10, flexShrink: 0 }}>
+            {(panelAbierto || foto.soloLista) && (
+            <div style={foto.soloLista
+                ? { ...st.panelInferior, maxHeight: 'none', overflowY: 'visible', boxShadow: 'none' }
+                : esMovil ? { ...st.panelInferior, position: 'absolute', bottom: '100%', left: 0, right: 0, maxHeight: '55vh' } : st.panelInferior}>
                 <h3 style={{ margin: '0 0 12px', color: '#2c3e50', borderBottom: '2px solid #ecf0f1', paddingBottom: 8 }}>
                     {infoCroquis.escuela || 'Croquis'}{infoCroquis.sector ? ` · ${infoCroquis.sector}` : ''}
                     {infoCroquis.mapsUrl && (
@@ -1203,13 +1377,13 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
                     <div style={{ color: '#7f8c8d', fontStyle: 'italic', textAlign: 'center', padding: 15 }}>No hay vías. ¡Crea la primera!</div>
                 ) : (
                     <div style={{ overflowX: 'auto' }}>
-                        <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 500 }}>
+                        <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: esMovil ? 0 : 500 }}>
                             <thead>
                                 <tr style={{ background: '#f8f9fa', color: '#2c3e50', textAlign: 'left' }}>
                                     <th style={st.th}>Nº</th>
                                     <th style={st.th}>Nombre</th>
                                     <th style={st.th}>Grado</th>
-                                    <th style={st.th}>Color</th>
+                                    {!foto.soloLista && <th style={st.th}>Color</th>}
                                     <th style={st.th}>Acciones</th>
                                 </tr>
                             </thead>
@@ -1223,11 +1397,19 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
                                             </button>
                                         </td>
                                         <td style={{ ...st.td, fontWeight: 'bold', color: '#e74c3c' }}>{v.info.grado || '-'}</td>
-                                        <td style={st.td}><div style={{ width: 20, height: 20, borderRadius: '50%', background: v.color }} /></td>
+                                        {!foto.soloLista && <td style={st.td}><div style={{ width: 20, height: 20, borderRadius: '50%', background: v.color }} /></td>}
                                         <td style={st.td}>
                                             <div style={{ display: 'flex', gap: 6 }}>
                                                 <button onClick={() => { setEditandoInfoViaIdx(i); }} style={st.btnAccion} title="Editar información">ℹ️</button>
-                                                <button onClick={() => { setEditandoViaIdx(i); setCreando(false); setEsCreandoCombinacion(false); setHerramienta('PAN'); }} style={st.btnAccion} title="Editar puntos">✏️</button>
+                                                {!esAjeno && <button onClick={() => setViaCompartiendo(v)} style={st.btnAccion} title="Compartir tarjeta de la vía">🔗</button>}
+                                                {foto.soloLista ? (
+                                                    <>
+                                                        <button onClick={() => moverViaEnLista(i, -1)} disabled={i === 0} style={st.btnAccion} title="Subir"><ChevronUp size={16} /></button>
+                                                        <button onClick={() => moverViaEnLista(i, 1)} disabled={i === vias.length - 1} style={st.btnAccion} title="Bajar"><ChevronDown size={16} /></button>
+                                                    </>
+                                                ) : (
+                                                    <button onClick={() => { setEditandoViaIdx(i); setCreando(false); setEsCreandoCombinacion(false); setHerramienta('PAN'); }} style={st.btnAccion} title="Editar puntos">✏️</button>
+                                                )}
                                                 <button onClick={() => eliminarVia(i)} style={st.btnAccion} title="Eliminar vía">🗑️</button>
                                             </div>
                                         </td>
@@ -1243,7 +1425,7 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
                             <span style={{ background: '#8e44ad', color: 'white', borderRadius: 5, padding: '1px 8px', fontSize: '0.8rem' }}>Combinaciones</span>
                         </div>
                         <div style={{ overflowX: 'auto' }}>
-                            <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 500 }}>
+                            <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: esMovil ? 0 : 500 }}>
                                 <thead>
                                     <tr style={{ background: '#f5eef8', color: '#6c3483', textAlign: 'left' }}>
                                         <th style={st.th}>Letra</th>
@@ -1275,6 +1457,28 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
                     </div>
                 )}
             </div>
+            )}
+            {!foto.soloLista && (
+            <div style={st.barraPanel}>
+                <button onClick={() => setPanelAbierto(a => !a)} style={st.btnBarraPanel}>
+                    <List size={16} />
+                    Vías ({vias.length}){combinaciones.length > 0 ? ` · Combinaciones (${combinaciones.length})` : ''}
+                    {panelAbierto ? <ChevronDown size={16} /> : <ChevronUp size={16} />}
+                </button>
+                {esMovil && (
+                    <button
+                        onClick={() => { if (mostrarAnotaciones) setHerramientaForma(null); setMostrarAnotaciones(a => !a); }}
+                        style={{ ...st.btnBarraPanel, flex: 'none', color: mostrarAnotaciones ? '#3498db' : '#2c3e50' }}>
+                        <Square size={14} /> Anotaciones
+                    </button>
+                )}
+            </div>
+            )}
+            </div>
+
+            {viaCompartiendo && (
+                <CompartirViaModal croquisId={croquísId.current} via={viaCompartiendo} onClose={() => setViaCompartiendo(null)} />
+            )}
 
             {/* MODAL: Información del Croquis */}
             {mostrarModalCroquis && (
@@ -1300,7 +1504,15 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
                                         ) : null;
                                     })()}
                                 </div>
-                                <AutocompleteInput label="Sector" value={infoCroquis.sector} onChange={v => setInfoCroquis(p => ({ ...p, sector: v }))} ph="Ej: Surgencia" opciones={sectoresDisponibles} />
+                                <div>
+                                    <AutocompleteInput label="Sector" value={infoCroquis.sector} onChange={v => setInfoCroquis(p => ({ ...p, sector: v }))} ph="Ej: Surgencia" opciones={sectoresDisponibles} />
+                                    {normalizarNombre(infoCroquis.escuela) && normalizarNombre(infoCroquis.sector)
+                                        && sectoresExistentes.includes(`${normalizarNombre(infoCroquis.escuela)}|${normalizarNombre(infoCroquis.sector)}`) && (
+                                        <div style={{ background: '#eaf4fb', borderRadius: 8, padding: '8px 12px', fontSize: '0.85rem', color: '#2980b9', marginTop: -8 }}>
+                                            Este sector ya existe en la escuela: tus fotos se mostrarán junto a las suyas como un solo sector.
+                                        </div>
+                                    )}
+                                </div>
                             </div>
                             <div style={{ marginBottom: 15 }}>
                                 <label style={st.label}>Ubicación exacta en el mapa</label>
@@ -1312,6 +1524,15 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
                                 <label style={{ ...st.label, marginTop: 12 }}>Enlace Google Maps (opcional, para compartir)</label>
                                 <input value={infoCroquis.mapsUrl} onChange={e => setInfoCroquis(p => ({ ...p, mapsUrl: e.target.value }))}
                                     placeholder="https://maps.app.goo.gl/..." style={st.input} />
+                            </div>
+                            <div style={{ marginBottom: 15 }}>
+                                <label style={st.label}>Itinerario hasta el sector</label>
+                                <ItinerarioEditor
+                                    puntos={infoCroquis.itinerario || []}
+                                    onChange={pts => setInfoCroquis(p => ({ ...p, itinerario: pts }))}
+                                    lat={infoCroquis.lat}
+                                    lng={infoCroquis.lng}
+                                />
                             </div>
                             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 15 }}>
                                 <InputModal label="Horario sol/sombra" value={infoCroquis.horarioSol} onChange={v => setInfoCroquis(p => ({ ...p, horarioSol: v }))} ph="Ej: Sombra todo el año" />
@@ -1507,7 +1728,7 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
                     <div style={st.modal}>
                         <div style={st.modalHeader}>
                             <h3>Datos de la Vía {editandoInfoViaIdx + 1}</h3>
-                            <button onClick={() => setEditandoInfoViaIdx(null)} style={st.btnClose}><X size={20} /></button>
+                            <button onClick={cerrarInfoVia} style={st.btnClose}><X size={20} /></button>
                         </div>
                         <div style={st.modalBody}>
                             <InputModal label="Nombre *"
@@ -1546,7 +1767,7 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
                                 value={vias[editandoInfoViaIdx].info?.info || ''}
                                 onChange={e => { const v = e.target.value; setVias(prev => { const c = [...prev]; c[editandoInfoViaIdx] = { ...c[editandoInfoViaIdx], info: { ...c[editandoInfoViaIdx].info, info: v } }; return c; }); }}
                                 style={{ ...st.input, height: 80, resize: 'none' }} placeholder="Ej: 10 cintas, paso duro en la 3ª chapa." />
-                            <button onClick={() => setEditandoInfoViaIdx(null)} style={{ ...st.btnPrimario, width: '100%', marginTop: 15 }}>Guardar</button>
+                            <button onClick={cerrarInfoVia} style={{ ...st.btnPrimario, width: '100%', marginTop: 15 }}>Guardar</button>
                         </div>
                     </div>
                 </div>
@@ -1850,7 +2071,7 @@ const InputModal = ({ label, value, onChange, ph, type = "text" }) => (
     </div>
 );
 
-function GradeSelector({ value, onChange }) {
+export function GradeSelector({ value, onChange }) {
     const numMatch = value?.match(/^(\d)/);
     const letMatch = value?.match(/[abc]/);
     const hasPlus = value?.includes('+') ?? false;
@@ -1929,10 +2150,15 @@ const st = {
     containerCarga: { minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#f4f6f8', padding: 20 },
     cardCarga: { background: 'white', padding: 40, borderRadius: 20, boxShadow: '0 20px 40px rgba(0,0,0,0.1)', textAlign: 'center', maxWidth: 450, width: '100%' },
     btnCarga: { display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, padding: 15, background: '#3498db', color: 'white', borderRadius: 12, cursor: 'pointer', fontWeight: 'bold', fontSize: '1.1rem', border: 'none', width: '100%', boxSizing: 'border-box' },
-    appContainer: { display: 'flex', flexDirection: 'column', height: '100vh', background: '#1e272e', fontFamily: "'Segoe UI', Tahoma, sans-serif" },
+    appContainer: { display: 'flex', flexDirection: 'column', height: '100dvh', background: '#1e272e', fontFamily: "'Segoe UI', Tahoma, sans-serif" },
     topbar: { background: '#2c3e50', padding: '10px 20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10, zIndex: 10, boxShadow: '0 4px 10px rgba(0,0,0,0.3)' },
     toolsBar: { background: '#ecf0f1', padding: 12, display: 'flex', flexDirection: 'column', alignItems: 'center', zIndex: 10, boxShadow: '0 4px 6px rgba(0,0,0,0.1)' },
     panelInferior: { background: 'white', padding: 15, maxHeight: '30vh', overflowY: 'auto', zIndex: 10, boxShadow: '0 -4px 10px rgba(0,0,0,0.1)' },
+    controlesFlotantes: { position: 'absolute', top: 8, right: 8, zIndex: 5, display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6 },
+    btnFlotante: { width: 40, height: 40, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(44,62,80,0.85)', color: 'white', border: 'none', borderRadius: 8, cursor: 'pointer' },
+    herramientaFlotante: { background: 'rgba(231,76,60,0.9)', color: 'white', borderRadius: 6, padding: '3px 7px', fontSize: '0.7rem', fontWeight: 'bold' },
+    barraPanel: { background: 'white', display: 'flex', borderTop: '1px solid #dfe6e9', boxShadow: '0 -2px 6px rgba(0,0,0,0.1)', position: 'relative' },
+    btnBarraPanel: { flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, padding: '9px 12px', background: 'none', border: 'none', color: '#2c3e50', fontWeight: 'bold', fontSize: '0.85rem', cursor: 'pointer' },
     divider: { width: 1, height: 30, background: 'rgba(255,255,255,0.2)', margin: '0 4px' },
     btnIcono: { background: 'rgba(255,255,255,0.1)', border: 'none', color: 'white', padding: 10, borderRadius: 8, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' },
     btnPrimario: { background: '#3498db', color: 'white', border: 'none', padding: '10px 20px', borderRadius: 8, fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' },

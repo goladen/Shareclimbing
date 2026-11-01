@@ -5,12 +5,14 @@ import {
     orderBy, updateDoc, deleteDoc, doc
 } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
-import { Bell, X } from 'lucide-react';
+import { Bell, X, Unlink } from 'lucide-react';
+import { DesvincularCroquisModal } from './AsociacionEscuela';
 
-export default function NotificacionesCampana({ onVerCroquis }) {
+export default function NotificacionesCampana({ onVerCroquis, onDesvinculado }) {
     const { usuario } = useAuth();
     const [notifs, setNotifs] = useState([]);
     const [abierto, setAbierto] = useState(false);
+    const [desvinculando, setDesvinculando] = useState(null);
     const panelRef = useRef();
 
     useEffect(() => {
@@ -47,6 +49,13 @@ export default function NotificacionesCampana({ onVerCroquis }) {
         await deleteDoc(doc(db, 'notificaciones', usuario.uid, 'items', id));
     };
 
+    const abrirDesvincular = async (n, e) => {
+        e.stopPropagation();
+        setAbierto(false);
+        setDesvinculando(n);
+        if (!n.leido) await updateDoc(doc(db, 'notificaciones', usuario.uid, 'items', n.id), { leido: true });
+    };
+
     const formatFecha = (ts) => {
         if (!ts?.toDate) return '';
         return ts.toDate().toLocaleDateString('es-ES', { day: '2-digit', month: 'short' });
@@ -80,9 +89,18 @@ export default function NotificacionesCampana({ onVerCroquis }) {
                                 {!n.leido && <div style={st.punto} />}
                                 <div style={st.itemCuerpo}>
                                     <div style={st.itemTitulo}>
-                                        <strong>{n.autorNombre}</strong> comentó en <em>{n.croquisNombre}</em>
+                                        {n.tipo === 'croquis_asociado' && <><strong>{n.autorNombre}</strong> añadió <em>{n.croquisNombre}</em> a tu escuela <em>{n.escuelaNombre}</em></>}
+                                        {n.tipo === 'croquis_desvinculado' && <><strong>{n.autorNombre}</strong> desvinculó <em>{n.croquisNombre}</em> de <em>{n.escuelaNombre}</em></>}
+                                        {n.tipo !== 'croquis_asociado' && n.tipo !== 'croquis_desvinculado' && <><strong>{n.autorNombre}</strong> comentó en <em>{n.croquisNombre}</em></>}
                                     </div>
-                                    <div style={st.itemPreview}>{n.textoPreview}</div>
+                                    {n.tipo === 'croquis_desvinculado'
+                                        ? <div style={st.itemMotivo}>«{n.textoPreview}»</div>
+                                        : n.textoPreview && <div style={st.itemPreview}>{n.textoPreview}</div>}
+                                    {n.tipo === 'croquis_asociado' && (
+                                        <button onClick={(e) => abrirDesvincular(n, e)} style={st.btnDesvincular}>
+                                            <Unlink size={12} /> Desvincular
+                                        </button>
+                                    )}
                                     <div style={st.itemFecha}>{formatFecha(n.createdAt)}</div>
                                 </div>
                                 <button onClick={(e) => eliminar(n.id, e)} style={st.btnX} title="Descartar">
@@ -93,6 +111,16 @@ export default function NotificacionesCampana({ onVerCroquis }) {
                     )}
                 </div>
             )}
+
+            {desvinculando && (
+                <DesvincularCroquisModal
+                    croquisId={desvinculando.croquisId}
+                    croquisNombre={desvinculando.croquisNombre}
+                    escuela={{ id: desvinculando.escuelaId, nombre: desvinculando.escuelaNombre }}
+                    onClose={() => setDesvinculando(null)}
+                    onDesvinculado={onDesvinculado}
+                />
+            )}
         </div>
     );
 }
@@ -100,7 +128,7 @@ export default function NotificacionesCampana({ onVerCroquis }) {
 const st = {
     btn: { position: 'relative', background: 'rgba(255,255,255,0.1)', border: 'none', color: 'white', padding: '8px 12px', borderRadius: 8, cursor: 'pointer', display: 'flex', alignItems: 'center' },
     badge: { position: 'absolute', top: 2, right: 2, background: '#e74c3c', color: 'white', borderRadius: '50%', width: 18, height: 18, fontSize: '0.68rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', justifyContent: 'center' },
-    panel: { position: 'absolute', top: '110%', right: 0, width: 320, background: 'white', borderRadius: 12, boxShadow: '0 8px 30px rgba(0,0,0,0.15)', zIndex: 3000, overflow: 'hidden', border: '1px solid #ecf0f1' },
+    panel: { position: 'absolute', top: '110%', right: 0, width: 320, maxWidth: 'calc(100vw - 24px)', maxHeight: '70vh', overflowY: 'auto', background: 'white', borderRadius: 12, boxShadow: '0 8px 30px rgba(0,0,0,0.15)', zIndex: 3000, overflow: 'hidden', border: '1px solid #ecf0f1' },
     panelHeader: { padding: '12px 16px', borderBottom: '1px solid #ecf0f1', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#f8f9fa' },
     vacio: { padding: '20px 16px', color: '#95a5a6', fontSize: '0.88rem', textAlign: 'center', margin: 0 },
     item: { display: 'flex', alignItems: 'flex-start', gap: 10, padding: '12px 16px', cursor: 'pointer', borderBottom: '1px solid #f0f0f0', transition: 'background 0.15s' },
@@ -108,6 +136,8 @@ const st = {
     itemCuerpo: { flex: 1, minWidth: 0 },
     itemTitulo: { fontSize: '0.85rem', color: '#2c3e50', marginBottom: 3 },
     itemPreview: { fontSize: '0.8rem', color: '#7f8c8d', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
+    itemMotivo: { fontSize: '0.8rem', color: '#555', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' },
+    btnDesvincular: { display: 'inline-flex', alignItems: 'center', gap: 4, marginTop: 6, padding: '3px 8px', background: 'white', color: '#e74c3c', border: '1px solid #e74c3c', borderRadius: 6, cursor: 'pointer', fontSize: '0.75rem', fontWeight: 'bold' },
     itemFecha: { fontSize: '0.75rem', color: '#bdc3c7', marginTop: 4 },
     btnX: { background: 'none', border: 'none', color: '#bdc3c7', cursor: 'pointer', padding: 2, flexShrink: 0, display: 'flex', alignItems: 'center' },
 };

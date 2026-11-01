@@ -1,11 +1,13 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet';
 import L from 'leaflet';
-import { collection, getDocs, deleteDoc, doc } from 'firebase/firestore';
+import { collection, getDoc, getDocs, deleteDoc, doc } from 'firebase/firestore';
 import { Search, Plus, LogIn, LogOut, Layers, Mountain, User } from 'lucide-react';
 import logo from '../assets/logotopoclimbing.png';
 import EscuelaModal from '../components/EscuelaModal';
+import RocodromoModal from '../components/RocodromoModal';
 import NotificacionesCampana from '../components/NotificacionesCampana';
+import { normalizarNombre, contarSectores } from '../utils/escuelas';
 
 const CAPAS_MAPA = {
     callejero: {
@@ -37,6 +39,12 @@ const iconoEscuela = new L.DivIcon({
     iconAnchor: [14, 14],
 });
 
+const iconoRocodromo = new L.DivIcon({
+    className: '',
+    html: `<div style="background:#3498db;color:white;padding:5px 9px;border-radius:12px;font-size:13px;font-weight:bold;white-space:nowrap;box-shadow:0 2px 8px rgba(0,0,0,0.35);border:2px solid white;">🧗</div>`,
+    iconAnchor: [14, 14],
+});
+
 // Extrae lat/lng: primero coordenadas explícitas, luego parseo de mapsUrl
 function extraerCoordenadas(info) {
     if (!info) return null;
@@ -62,17 +70,7 @@ function RecenterMap({ coords }) {
     return null;
 }
 
-function FlyToEscuela({ escuelas, escuelaId }) {
-    const map = useMap();
-    useEffect(() => {
-        if (!escuelaId || !escuelas.length) return;
-        const e = escuelas.find(e => e.id === escuelaId);
-        if (e?.lat && e?.lng) map.flyTo([e.lat, e.lng], 14, { duration: 1.5 });
-    }, [escuelaId, escuelas]); // eslint-disable-line
-    return null;
-}
-
-export default function HomePage({ onCrearCroquis, onVerCroquis, onVerPerfil, escuelaIdDestacada }) {
+export default function HomePage({ onCrearCroquis, onVerCroquis, onVerPerfil, onVerEscuela, onVerRocodromo, vistaInicial }) {
     const { usuario, cerrarSesion, setModalAuth } = useAuth();
     const [croquis, setCroquis] = useState([]);
     const [busqueda, setBusqueda] = useState('');
@@ -82,17 +80,9 @@ export default function HomePage({ onCrearCroquis, onVerCroquis, onVerPerfil, es
     const [escuelas, setEscuelas] = useState([]);
     const [mostrarModalEscuela, setMostrarModalEscuela] = useState(false);
     const [escuelaEditando, setEscuelaEditando] = useState(null);
-    const [vistaActiva, setVistaActiva] = useState('croquis'); // 'croquis' | 'escuelas'
-    const markerEscuelaRef = useRef(null);
-
-    // Cuando llega un deep link de escuela, cambiar a la pestaña de escuelas y abrir popup
-    useEffect(() => {
-        if (!escuelaIdDestacada) return;
-        setVistaActiva('escuelas');
-        // Abrir popup después de que el mapa renderice los marcadores
-        const t = setTimeout(() => markerEscuelaRef.current?.openPopup(), 1800);
-        return () => clearTimeout(t);
-    }, [escuelaIdDestacada, escuelas]);
+    const [vistaActiva, setVistaActiva] = useState(vistaInicial || 'croquis'); // 'croquis' | 'escuelas' | 'rocodromos'
+    const [rocodromos, setRocodromos] = useState([]);
+    const [mostrarModalRocodromo, setMostrarModalRocodromo] = useState(false);
 
     const cargarCroquis = useCallback(async () => {
         setCargando(true);
@@ -112,7 +102,14 @@ export default function HomePage({ onCrearCroquis, onVerCroquis, onVerPerfil, es
         } catch (e) { console.error(e); }
     }, []);
 
-    useEffect(() => { cargarCroquis(); cargarEscuelas(); }, [cargarCroquis, cargarEscuelas]);
+    const cargarRocodromos = useCallback(async () => {
+        try {
+            const snap = await getDocs(collection(db, 'rocodromos'));
+            setRocodromos(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+        } catch (e) { console.error(e); }
+    }, []);
+
+    useEffect(() => { cargarCroquis(); cargarEscuelas(); cargarRocodromos(); }, [cargarCroquis, cargarEscuelas, cargarRocodromos]);
 
     const eliminarCroquis = async (id) => {
         if (!window.confirm('¿Eliminar este croquis? Esta acción no se puede deshacer.')) return;
@@ -132,6 +129,17 @@ export default function HomePage({ onCrearCroquis, onVerCroquis, onVerPerfil, es
             || c.infoCroquis?.sector?.toLowerCase().includes(texto)
             || c.infoCroquis?.escuela?.toLowerCase().includes(texto);
     });
+
+    // Mismo sector en la misma escuela: una sola tarjeta que lleva a la página del sector
+    const tarjetas = [...croquisFiltrados.reduce((grupos, c) => {
+        const sector = normalizarNombre(c.infoCroquis?.sector);
+        const nombreEscuela = normalizarNombre(c.infoCroquis?.escuela);
+        const escuela = sector && nombreEscuela ? escuelas.find(e => normalizarNombre(e.nombre) === nombreEscuela) : null;
+        const clave = escuela ? `${escuela.id}|${sector}` : c.id;
+        if (!grupos.has(clave)) grupos.set(clave, { clave, escuela, croquis: [] });
+        grupos.get(clave).croquis.push(c);
+        return grupos;
+    }, new Map()).values()];
 
     const croquisConCoords = croquisFiltrados.filter(c => extraerCoordenadas(c.infoCroquis));
 
@@ -186,10 +194,16 @@ export default function HomePage({ onCrearCroquis, onVerCroquis, onVerPerfil, es
                     {usuario ? (
                         <div style={st.usuarioInfo}>
                             <NotificacionesCampana
-                                onVerCroquis={(croquisId) => {
+                                onVerCroquis={async (croquisId) => {
                                     const c = croquis.find(x => x.id === croquisId);
-                                    if (c) onVerCroquis(c);
+                                    if (c) { onVerCroquis(c); return; }
+                                    // Los croquis privados no están en la lista pública
+                                    try {
+                                        const snap = await getDoc(doc(db, 'croquis_escalada', croquisId));
+                                        if (snap.exists()) onVerCroquis({ id: snap.id, ...snap.data() });
+                                    } catch (e) { console.error(e); }
                                 }}
+                                onDesvinculado={cargarCroquis}
                             />
                             <button onClick={onVerPerfil} style={{ ...st.btnSalir, color: 'rgba(255,255,255,0.85)' }} title="Mi perfil"><User size={18} /></button>
                             <div style={{ ...st.avatarCircle, cursor: 'pointer' }} onClick={onVerPerfil}>{(usuario.displayName || usuario.email)[0].toUpperCase()}</div>
@@ -237,14 +251,23 @@ export default function HomePage({ onCrearCroquis, onVerCroquis, onVerPerfil, es
                             key={`e-${e.id}`}
                             position={[e.lat, e.lng]}
                             icon={iconoEscuela}
-                            ref={e.id === escuelaIdDestacada ? markerEscuelaRef : undefined}
                         >
                             <Popup maxWidth={300} minWidth={240}>
-                                <PopupEscuela escuela={e} croquis={croquis} onCrearCroquis={onCrearCroquis} />
+                                <PopupEscuela escuela={e} croquis={croquis} onCrearCroquis={onCrearCroquis} onVerEscuela={onVerEscuela} />
                             </Popup>
                         </Marker>
                     ))}
-                    <FlyToEscuela escuelas={escuelas} escuelaId={escuelaIdDestacada} />
+                    {rocodromos.filter(r => r.lat && r.lng).map(r => (
+                        <Marker key={`r-${r.id}`} position={[r.lat, r.lng]} icon={iconoRocodromo}>
+                            <Popup>
+                                <div style={{ fontWeight: 'bold', color: '#2c3e50', marginBottom: 8 }}>🧗 {r.nombre}</div>
+                                <button onClick={() => onVerRocodromo(r.id)}
+                                    style={{ width: '100%', padding: 8, background: '#3498db', color: 'white', border: 'none', borderRadius: 8, fontWeight: 'bold', cursor: 'pointer' }}>
+                                    Ver rocódromo
+                                </button>
+                            </Popup>
+                        </Marker>
+                    ))}
                 </MapContainer>
             </div>
 
@@ -253,10 +276,13 @@ export default function HomePage({ onCrearCroquis, onVerCroquis, onVerPerfil, es
                 {/* Tabs */}
                 <div style={st.tabs}>
                     <button onClick={() => setVistaActiva('croquis')} style={{ ...st.tab, ...(vistaActiva === 'croquis' ? st.tabActivo : {}) }}>
-                        Croquis <span style={st.contadorBadge}>{croquisFiltrados.length}</span>
+                        Croquis <span style={st.contadorBadge}>{tarjetas.length}</span>
                     </button>
                     <button onClick={() => setVistaActiva('escuelas')} style={{ ...st.tab, ...(vistaActiva === 'escuelas' ? st.tabActivo : {}) }}>
                         Escuelas <span style={st.contadorBadge}>{escuelas.length}</span>
+                    </button>
+                    <button onClick={() => setVistaActiva('rocodromos')} style={{ ...st.tab, ...(vistaActiva === 'rocodromos' ? st.tabActivo : {}) }}>
+                        Rocódromos <span style={st.contadorBadge}>{rocodromos.length}</span>
                     </button>
                 </div>
 
@@ -264,7 +290,38 @@ export default function HomePage({ onCrearCroquis, onVerCroquis, onVerPerfil, es
                     cargando ? <div style={st.cargando}>Cargando…</div>
                     : croquisFiltrados.length === 0
                         ? <div style={st.sinResultados}>{busqueda ? 'No se encontraron sectores.' : 'No hay croquis públicos aún.'}</div>
-                        : <div style={st.grid}>{croquisFiltrados.map(c => <TarjetaCroquis key={c.id} croquis={c} onVer={() => onVerCroquis(c)} onEliminar={() => eliminarCroquis(c.id)} usuario={usuario} />)}</div>
+                        : <div style={st.grid}>{tarjetas.map(t => t.croquis.length > 1
+                            ? <TarjetaSector key={t.clave} grupo={t} onVer={() => onVerEscuela(t.escuela.id, t.croquis[0].infoCroquis.sector.trim())} />
+                            : <TarjetaCroquis key={t.clave} croquis={t.croquis[0]} onVer={() => onVerCroquis(t.croquis[0])} onEliminar={() => eliminarCroquis(t.croquis[0].id)} usuario={usuario} />)}</div>
+                )}
+
+                {vistaActiva === 'rocodromos' && (
+                    <>
+                        <button onClick={() => usuario ? setMostrarModalRocodromo(true) : setModalAuth(true)}
+                            style={{ ...st.btnCrear, marginBottom: 14 }}>
+                            <Plus size={18} /> Nuevo rocódromo
+                        </button>
+                        {rocodromos.length === 0
+                            ? <div style={st.sinResultados}>Aún no hay rocódromos.</div>
+                            : <div style={st.grid}>
+                                {rocodromos
+                                    .filter(r => !busqueda || r.nombre?.toLowerCase().includes(busqueda.toLowerCase()))
+                                    .map(r => (
+                                        <div key={r.id} style={st.tarjeta} onClick={() => onVerRocodromo(r.id)}>
+                                            <div style={st.tarjetaImg}>
+                                                {r.fotos?.[0]?.imagenUrl
+                                                    ? <img src={r.fotos[0].imagenUrl} alt={r.nombre} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                                                    : <div style={st.tarjetaImgPlaceholder}>🧗</div>}
+                                                <div style={st.tarjetaBadge}>{r.miembros?.length || 0} {r.miembros?.length === 1 ? 'miembro' : 'miembros'}</div>
+                                            </div>
+                                            <div style={st.tarjetaInfo}>
+                                                <div style={st.tarjetaTitulo}>{r.nombre}</div>
+                                                {r.descripcion && <div style={st.tarjetaEscuela}>{r.descripcion.slice(0, 80)}</div>}
+                                            </div>
+                                        </div>
+                                    ))}
+                            </div>}
+                    </>
                 )}
 
                 {vistaActiva === 'escuelas' && (
@@ -275,8 +332,9 @@ export default function HomePage({ onCrearCroquis, onVerCroquis, onVerPerfil, es
                                 .filter(e => !busqueda || e.nombre?.toLowerCase().includes(busqueda.toLowerCase()))
                                 .map(e => (
                                     <TarjetaEscuela key={e.id} escuela={e}
-                                        numSectores={croquis.filter(c => c.infoCroquis?.escuela?.toLowerCase() === e.nombre?.toLowerCase()).length}
+                                        numSectores={contarSectores(croquis.filter(c => normalizarNombre(c.infoCroquis?.escuela) === normalizarNombre(e.nombre)))}
                                         onCrearCroquis={onCrearCroquis}
+                                        onVerEscuela={onVerEscuela}
                                         onEditar={() => setEscuelaEditando(e)}
                                         onEliminar={() => eliminarEscuela(e.id)}
                                         usuario={usuario}
@@ -287,6 +345,12 @@ export default function HomePage({ onCrearCroquis, onVerCroquis, onVerPerfil, es
                 )}
             </div>
 
+            {mostrarModalRocodromo && (
+                <RocodromoModal
+                    onClose={() => setMostrarModalRocodromo(false)}
+                    onCreado={(nuevo) => setRocodromos(prev => [nuevo, ...prev])}
+                />
+            )}
             {mostrarModalEscuela && (
                 <EscuelaModal
                     onClose={() => setMostrarModalEscuela(false)}
@@ -354,8 +418,8 @@ function PopupSector({ sector, onVer }) {
     );
 }
 
-function PopupEscuela({ escuela, croquis, onCrearCroquis }) {
-    const sectores = croquis.filter(c => c.infoCroquis?.escuela?.toLowerCase() === escuela.nombre?.toLowerCase());
+function PopupEscuela({ escuela, croquis, onCrearCroquis, onVerEscuela }) {
+    const sectores = contarSectores(croquis.filter(c => normalizarNombre(c.infoCroquis?.escuela) === normalizarNombre(escuela.nombre)));
     return (
         <div style={{ fontFamily: "'Segoe UI', sans-serif", minWidth: 220 }}>
             {escuela.imagenUrl && (
@@ -365,8 +429,12 @@ function PopupEscuela({ escuela, croquis, onCrearCroquis }) {
             <div style={{ fontWeight: 'bold', fontSize: '1rem', color: '#2c3e50', marginBottom: 4 }}>⛰️ {escuela.nombre}</div>
             {escuela.descripcion && <p style={{ fontSize: '0.82rem', color: '#555', margin: '0 0 8px' }}>{escuela.descripcion}</p>}
             <div style={{ fontSize: '0.8rem', color: '#27ae60', fontWeight: 'bold', marginBottom: 8 }}>
-                {sectores.length} sector{sectores.length !== 1 ? 'es' : ''} con croquis
+                {sectores} sector{sectores !== 1 ? 'es' : ''} con croquis
             </div>
+            <button onClick={() => onVerEscuela(escuela.id)}
+                style={{ width: '100%', padding: '8px', background: '#3498db', color: 'white', border: 'none', borderRadius: 8, fontWeight: 'bold', cursor: 'pointer', fontSize: '0.9rem', marginBottom: 6 }}>
+                Ver página de la escuela
+            </button>
             <button onClick={() => onCrearCroquis(escuela.nombre)}
                 style={{ width: '100%', padding: '8px', background: '#27ae60', color: 'white', border: 'none', borderRadius: 8, fontWeight: 'bold', cursor: 'pointer', fontSize: '0.9rem' }}>
                 + Añadir sector
@@ -375,7 +443,7 @@ function PopupEscuela({ escuela, croquis, onCrearCroquis }) {
     );
 }
 
-function TarjetaEscuela({ escuela, numSectores, onCrearCroquis, onEditar, onEliminar, usuario }) {
+function TarjetaEscuela({ escuela, numSectores, onCrearCroquis, onVerEscuela, onEditar, onEliminar, usuario }) {
     const esMio = usuario?.uid === escuela.creadoPor;
     const [copiado, setCopiado] = useState(false);
     const compartir = (e) => {
@@ -388,7 +456,7 @@ function TarjetaEscuela({ escuela, numSectores, onCrearCroquis, onEditar, onElim
     };
     return (
         <div style={{ ...st.tarjeta, border: '2px solid #eafaf1' }}>
-            <div style={{ ...st.tarjetaImg, background: '#eafaf1', position: 'relative' }}>
+            <div style={{ ...st.tarjetaImg, background: '#eafaf1', position: 'relative' }} onClick={() => onVerEscuela(escuela.id)}>
                 {escuela.imagenUrl
                     ? <img src={escuela.imagenUrl} alt={escuela.nombre} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
                     : <div style={st.tarjetaImgPlaceholder}>⛰️</div>}
@@ -407,10 +475,16 @@ function TarjetaEscuela({ escuela, numSectores, onCrearCroquis, onEditar, onElim
             <div style={st.tarjetaInfo}>
                 <div style={{ ...st.tarjetaTitulo, color: '#27ae60' }}>{escuela.nombre}</div>
                 {escuela.descripcion && <div style={{ ...st.tarjetaEscuela, fontSize: '0.8rem' }}>{escuela.descripcion.slice(0, 80)}{escuela.descripcion.length > 80 ? '…' : ''}</div>}
-                <button onClick={() => onCrearCroquis(escuela.nombre)}
-                    style={{ marginTop: 8, padding: '6px 12px', background: '#27ae60', color: 'white', border: 'none', borderRadius: 6, fontWeight: 'bold', cursor: 'pointer', fontSize: '0.8rem' }}>
-                    + Añadir sector
-                </button>
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8 }}>
+                    <button onClick={() => onVerEscuela(escuela.id)}
+                        style={{ padding: '6px 12px', background: '#3498db', color: 'white', border: 'none', borderRadius: 6, fontWeight: 'bold', cursor: 'pointer', fontSize: '0.8rem' }}>
+                        Ver página
+                    </button>
+                    <button onClick={() => onCrearCroquis(escuela.nombre)}
+                        style={{ padding: '6px 12px', background: '#27ae60', color: 'white', border: 'none', borderRadius: 6, fontWeight: 'bold', cursor: 'pointer', fontSize: '0.8rem' }}>
+                        + Añadir sector
+                    </button>
+                </div>
             </div>
         </div>
     );
@@ -420,6 +494,29 @@ function InfoChip({ icon, label }) {
     return (
         <div style={{ background: '#f8f9fa', borderRadius: 6, padding: '4px 8px', fontSize: '0.78rem', color: '#555' }}>
             {icon} {label}
+        </div>
+    );
+}
+
+function TarjetaSector({ grupo, onVer }) {
+    const info = grupo.croquis[0].infoCroquis;
+    const portada = grupo.croquis.find(c => c.imagenUrl)?.imagenUrl;
+    const numFotos = grupo.croquis.reduce((n, c) => n + (c.fotos?.length || 1), 0);
+    const numVias = grupo.croquis.reduce((n, c) => n + (c.fotos?.length > 0
+        ? c.fotos.reduce((m, f) => m + (f.vias?.length || 0), 0)
+        : (c.vias?.length || 0)), 0);
+    return (
+        <div style={st.tarjeta} onClick={onVer}>
+            <div style={st.tarjetaImg}>
+                {portada
+                    ? <img src={portada} alt={info.sector} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                    : <div style={st.tarjetaImgPlaceholder}>🏔️</div>}
+                <div style={st.tarjetaBadge}>{numFotos} fotos · {numVias} vías</div>
+            </div>
+            <div style={st.tarjetaInfo}>
+                <div style={st.tarjetaTitulo}>{info.sector.trim()}</div>
+                <div style={st.tarjetaEscuela}>{grupo.escuela.nombre}</div>
+            </div>
         </div>
     );
 }
@@ -476,7 +573,7 @@ const st = {
     navAcciones: { display: 'flex', alignItems: 'center', gap: 10 },
     btnEscuela: { display: 'flex', alignItems: 'center', gap: 6, padding: '9px 16px', background: 'rgba(39,174,96,0.2)', color: 'white', border: '1px solid rgba(39,174,96,0.6)', borderRadius: 8, fontWeight: 'bold', cursor: 'pointer', fontSize: '0.9rem' },
     btnCrear: { display: 'flex', alignItems: 'center', gap: 6, padding: '9px 18px', background: '#27ae60', color: 'white', border: 'none', borderRadius: 8, fontWeight: 'bold', cursor: 'pointer', fontSize: '0.9rem' },
-    tabs: { display: 'flex', gap: 8, marginBottom: 14 },
+    tabs: { display: 'flex', gap: 8, marginBottom: 14, flexWrap: 'wrap' },
     tab: { padding: '8px 18px', borderRadius: 20, border: '2px solid #ecf0f1', background: 'white', color: '#7f8c8d', fontWeight: 'bold', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8, fontSize: '0.9rem' },
     tabActivo: { background: '#2c3e50', color: 'white', borderColor: '#2c3e50' },
     btnLogin: { display: 'flex', alignItems: 'center', gap: 6, padding: '9px 16px', background: 'rgba(255,255,255,0.15)', color: 'white', border: '1px solid rgba(255,255,255,0.3)', borderRadius: 8, fontWeight: 'bold', cursor: 'pointer', fontSize: '0.9rem' },

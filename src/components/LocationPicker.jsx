@@ -4,11 +4,17 @@ import L from 'leaflet';
 import { Search, MapPin, Crosshair, X, Layers } from 'lucide-react';
 import 'leaflet/dist/leaflet.css';
 
-const CAPAS = {
+export const CAPAS = {
     callejero: {
         label: 'Mapa',
         url: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
         attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+    },
+    topo: {
+        label: 'Topo',
+        url: 'https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png',
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>, &copy; <a href="https://opentopomap.org">OpenTopoMap</a>',
+        maxZoom: 17,
     },
     satelite: {
         label: 'Satélite',
@@ -167,6 +173,7 @@ export default function LocationPicker({ lat, lng, onChange }) {
                         key={capa}
                         attribution={CAPAS[capa].attribution}
                         url={CAPAS[capa].url}
+                        maxZoom={CAPAS[capa].maxZoom || 19}
                     />
                     <MapResizer />
                     {tienePos && <MapFlyTo lat={lat} lng={lng} />}
