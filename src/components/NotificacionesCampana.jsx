@@ -1,18 +1,21 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { db } from '../firebase';
 import {
-    collection, onSnapshot, query,
+    collection, onSnapshot, query, where,
     orderBy, updateDoc, deleteDoc, doc
 } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
 import { Bell, X, Unlink } from 'lucide-react';
 import { DesvincularCroquisModal } from './AsociacionEscuela';
+import RevisarPropuestaModal from './RevisarPropuestaModal';
 
-export default function NotificacionesCampana({ onVerCroquis, onDesvinculado }) {
+export default function NotificacionesCampana({ onVerCroquis, onDesvinculado, onPropuestaAplicada }) {
     const { usuario } = useAuth();
     const [notifs, setNotifs] = useState([]);
     const [abierto, setAbierto] = useState(false);
     const [desvinculando, setDesvinculando] = useState(null);
+    const [propuestas, setPropuestas] = useState([]);
+    const [revisando, setRevisando] = useState(null);
     const panelRef = useRef();
 
     useEffect(() => {
@@ -26,6 +29,13 @@ export default function NotificacionesCampana({ onVerCroquis, onDesvinculado }) 
         );
     }, [usuario?.uid]);
 
+    // Propuestas de cambios enviadas desde tarjetas de vía, pendientes de revisar
+    useEffect(() => {
+        if (!usuario) return;
+        const q = query(collection(db, 'propuestas_via'), where('paraUid', '==', usuario.uid), where('estado', '==', 'pendiente'));
+        return onSnapshot(q, snap => setPropuestas(snap.docs.map(d => ({ id: d.id, ...d.data() }))), e => console.error(e));
+    }, [usuario?.uid]);
+
     useEffect(() => {
         const handler = (e) => {
             if (!panelRef.current?.contains(e.target)) setAbierto(false);
@@ -36,7 +46,7 @@ export default function NotificacionesCampana({ onVerCroquis, onDesvinculado }) 
 
     if (!usuario) return null;
 
-    const noLeidas = notifs.filter(n => !n.leido).length;
+    const noLeidas = notifs.filter(n => !n.leido).length + propuestas.length;
 
     const marcarLeida = async (n) => {
         await updateDoc(doc(db, 'notificaciones', usuario.uid, 'items', n.id), { leido: true });
@@ -69,7 +79,7 @@ export default function NotificacionesCampana({ onVerCroquis, onDesvinculado }) 
             </button>
 
             {abierto && (
-                <div style={st.panel}>
+                <div className="panel-notificaciones" style={st.panel}>
                     <div style={st.panelHeader}>
                         <span style={{ fontWeight: 'bold', fontSize: '0.95rem' }}>Notificaciones</span>
                         {notifs.length > 0 && (
@@ -77,7 +87,16 @@ export default function NotificacionesCampana({ onVerCroquis, onDesvinculado }) 
                         )}
                     </div>
 
-                    {notifs.length === 0 ? (
+                    {propuestas.map(pr => (
+                        <div key={pr.id} onClick={() => { setAbierto(false); setRevisando(pr); }} style={{ ...st.item, background: '#fff8e1' }}>
+                            <div style={{ ...st.punto, background: '#f39c12' }} />
+                            <div style={st.itemCuerpo}>
+                                <div style={st.itemTitulo}><strong>{pr.autorNombre}</strong> propone cambios en <em>{pr.cambios?.info?.nombre || 'una vía'}</em></div>
+                                <div style={st.itemPreview}>Pulsa para revisar y aceptar o rechazar</div>
+                            </div>
+                        </div>
+                    ))}
+                    {notifs.length === 0 && propuestas.length === 0 ? (
                         <p style={st.vacio}>Sin notificaciones.</p>
                     ) : (
                         notifs.map(n => (
@@ -110,6 +129,11 @@ export default function NotificacionesCampana({ onVerCroquis, onDesvinculado }) 
                         ))
                     )}
                 </div>
+            )}
+
+            {revisando && (
+                <RevisarPropuestaModal propuesta={revisando} onClose={() => setRevisando(null)}
+                    onAplicada={(aceptada) => { if (aceptada) onPropuestaAplicada?.(); }} />
             )}
 
             {desvinculando && (

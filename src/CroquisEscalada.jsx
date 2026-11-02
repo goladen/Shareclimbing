@@ -13,6 +13,10 @@ import { useAuth } from './contexts/AuthContext';
 import LocationPicker from './components/LocationPicker';
 import { ItinerarioEditor } from './components/ItinerarioMapa';
 import CompartirViaModal from './components/CompartirViaModal';
+import EquipadorInput from './components/EquipadorInput';
+import { resolverEquipadores } from './utils/equipadores';
+import SelectorRegion from './components/SelectorRegion';
+import { EditorReferencias, limpiarReferencias } from './components/Referencias';
 import { normalizarNombre, notificarAsociacion } from './utils/escuelas';
 import { procesarImagenParaSubir, subirACloudinary, formatearMB, MAX_MB } from './utils/imagen';
 
@@ -37,14 +41,22 @@ const generarCurvaSuave = (puntos) => {
     return path;
 };
 
+// Huella del contenido guardable, para saber si hay cambios sin guardar. Deja fuera lo
+// que cambia sin intervención del usuario (archivo local, dimensiones de la imagen).
+const firmaContenido = (fotos, infoCroquis, visibilidad) => JSON.stringify({
+    fotos: fotos.map(({ imagenFile, imagenEsArchivo, srcW, srcH, ...resto }) => resto),
+    infoCroquis,
+    visibilidad,
+});
+
 const MEDIA_MOVIL = '(max-width: 900px), (max-height: 500px)';
 
 const INFO_CROQUIS_INIT = {
-    escuela: '', sector: '', mapsUrl: '', lat: '', lng: '', horarioSol: '',
+    escuela: '', sector: '', pais: '', comunidad: '', mapsUrl: '', lat: '', lng: '', horarioSol: '',
     mejorEpoca: '', acceso: '', restricciones: '', masInfo: ''
 };
 
-export default function CroquisEscalada({ onExit, croquisInicial }) {
+export default function CroquisEscalada({ onExit, croquisInicial, registrarSalida }) {
     const { usuario, pedirAuth } = useAuth();
 
     // ─── MULTI-FOTO (varias fotos por sector) ───
@@ -123,6 +135,7 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
     const [editandoViaIdx, setEditandoViaIdx] = useState(null);
     const [escuelasDisponibles, setEscuelasDisponibles] = useState([]);
     const [sectoresExistentes, setSectoresExistentes] = useState([]);
+    const [regionesEscuelas, setRegionesEscuelas] = useState({}); // nombre normalizado → { pais, comunidad }
     const escuelaGuardada = useRef(normalizarNombre(croquisInicial?.infoCroquis?.escuela));
     const [sectoresDisponibles, setSectoresDisponibles] = useState([]);
     const [mapsEmbedUrl, setMapsEmbedUrl] = useState('');
@@ -160,6 +173,19 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
     const [mostrarImpresion, setMostrarImpresion] = useState(false);
 
     const contenedorRef = useRef(null);
+
+    // ─── CAMBIOS SIN GUARDAR ───
+    const firmaGuardada = useRef(null);
+    const [autoGuardar, setAutoGuardar] = useState(false);
+    const [aviso, setAviso] = useState(null); // { texto, tipo: 'ok' | 'pendiente' }
+    const temporizadorAviso = useRef(null);
+    const mostrarAviso = (texto, tipo) => {
+        clearTimeout(temporizadorAviso.current);
+        setAviso({ texto, tipo });
+        temporizadorAviso.current = setTimeout(() => setAviso(null), tipo === 'ok' ? 2000 : 4000);
+    };
+    const [confirmarSalida, setConfirmarSalida] = useState(false);
+    const hayCambiosRef = useRef(() => false);
     const pulsacion = useRef(null);
 
     // En móvil la lista de vías y las anotaciones se pliegan para dejar la foto libre
@@ -215,6 +241,9 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
                 getDocs(collection(db, 'escuelas')),
             ]);
             const escuelas = new Set(snapEscuelas.docs.map(d => d.data().nombre?.trim()).filter(Boolean));
+            setRegionesEscuelas(Object.fromEntries(snapEscuelas.docs
+                .filter(d => d.data().pais)
+                .map(d => [normalizarNombre(d.data().nombre), { pais: d.data().pais, comunidad: d.data().comunidad || '' }])));
             const sectores = new Set();
             snap.docs.forEach(d => {
                 const info = d.data().infoCroquis;
@@ -297,6 +326,8 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
     const cerrarInfoVia = () => {
         const idx = editandoInfoViaIdx;
         if (foto.soloLista && !vias[idx]?.info?.nombre?.trim()) setVias(prev => prev.filter((_, i) => i !== idx));
+        // En una lista sin foto, cerrar la ficha con nombre equivale a crear la vía
+        else if (foto.soloLista && !esAjeno) setAutoGuardar(true);
         setEditandoInfoViaIdx(null);
     };
 
@@ -306,8 +337,12 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
     };
 
     // ─── FIREBASE: guardar croquis propio (multi-foto) ───
-    const ejecutarGuardado = async () => {
+    // silencioso: guardado automático al crear una vía, con aviso breve en vez de alerta
+    const ejecutarGuardado = async ({ silencioso = false } = {}) => {
         setGuardando(true);
+        const infoAlGuardar = infoCroquis;
+        const visibilidadAlGuardar = visibilidad;
+        const subidas = {};
         try {
             // Subir fotos locales a Cloudinary
             const fotasGuardadas = [];
@@ -329,6 +364,7 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
                     const resultado = await procesarImagenParaSubir(fileParaSubir, setProgresoSubida);
                     if (resultado.error) { alert(resultado.error); setGuardando(false); setProgresoSubida(''); return; }
                     urlFinal = await subirACloudinary(resultado.blob, setProgresoSubida);
+                    subidas[i] = urlFinal;
                     setFotos(prev => prev.map((pf, pi) => pi === i ? { ...pf, imagenUrl: urlFinal, imagenEsArchivo: false, imagenFile: null } : pf));
                 }
                 fotasGuardadas.push({
@@ -338,7 +374,7 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
                     ...(f.nombre ? { nombre: f.nombre } : {}),
                     srcW: f.srcW || null,
                     srcH: f.srcH || null,
-                    vias: (f.vias || []).map(v => ({ id: v.id, inicio: v.inicio, fin: v.fin, intermedios: v.intermedios, textos: v.textos, info: v.info, color: v.color, grosor: v.grosor || 4 })),
+                    vias: (await resolverEquipadores(f.vias || [], auth.currentUser?.uid)).map(v => ({ id: v.id, inicio: v.inicio, fin: v.fin, intermedios: v.intermedios, textos: v.textos, info: v.info, color: v.color, grosor: v.grosor || 4 })),
                     formas: f.formas || [],
                     combinaciones: (f.combinaciones || []).map(c => ({ id: c.id, inicio: c.inicio, fin: c.fin, intermedios: c.intermedios, textos: c.textos, info: c.info, color: c.color, grosor: c.grosor || 4 }))
                 });
@@ -346,7 +382,7 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
             setProgresoSubida('');
 
             const data = {
-                infoCroquis,
+                infoCroquis: infoCroquis.referencias ? { ...infoCroquis, referencias: limpiarReferencias(infoCroquis.referencias) } : infoCroquis,
                 fotos: fotasGuardadas,
                 imagenUrl: fotasGuardadas[0]?.imagenUrl || null,
                 vias: fotasGuardadas[0]?.vias || [],
@@ -373,6 +409,8 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
                         await addDoc(collection(db, 'escuelas'), {
                             nombre: escuelaNombre,
                             descripcion: '',
+                            pais: infoCroquis.pais || '',
+                            comunidad: infoCroquis.comunidad || '',
                             lat: infoCroquis.lat ? parseFloat(infoCroquis.lat) : null,
                             lng: infoCroquis.lng ? parseFloat(infoCroquis.lng) : null,
                             creadoPor: auth.currentUser.uid,
@@ -396,12 +434,23 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
                 }
             }
             escuelaGuardada.current = escuelaActual;
-            alert('Croquis guardado');
+            // Lo guardado es lo que había al empezar; lo editado mientras tanto sigue pendiente
+            firmaGuardada.current = firmaContenido(
+                fotosActuales.map((f, i) => subidas[i] ? { ...f, imagenUrl: subidas[i] } : f),
+                infoAlGuardar, visibilidadAlGuardar);
+            if (silencioso) {
+                mostrarAviso('Guardado ✓', 'ok');
+            } else {
+                alert('Croquis guardado');
+            }
+            setGuardando(false);
+            return true;
         } catch (e) {
             setProgresoSubida('');
             alert('Error al guardar: ' + e.message);
         }
         setGuardando(false);
+        return false;
     };
 
     // ─── FIREBASE: guardar como capa (croquis ajeno) ───
@@ -475,18 +524,95 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
     };
 
     // ─── GUARDAR (decide flujo según contexto) ───
-    const guardarEnFirebase = () => {
+    // Un sector de una escuela con país y comunidad los hereda mientras no se hayan elegido
+    useEffect(() => { cargarSugerencias(); }, []); // eslint-disable-line
+    useEffect(() => {
+        const region = regionesEscuelas[normalizarNombre(infoCroquis.escuela)];
+        if (region && !infoCroquis.pais && !croquísId.current) setInfoCroquis(p => ({ ...p, ...region }));
+    }, [infoCroquis.escuela, regionesEscuelas]); // eslint-disable-line
+
+    // Devuelve true si el croquis ha quedado guardado
+    const guardarEnFirebase = async ({ silencioso = false } = {}) => {
+        // Obligatorio en croquis nuevos; los anteriores se pueden completar más adelante
+        if (!croquísId.current && (!infoCroquis.pais?.trim() || !infoCroquis.comunidad?.trim())) {
+            // El guardado automático no interrumpe: avisa y espera al siguiente guardado
+            if (silencioso) {
+                mostrarAviso('Sin guardar: falta el país y la comunidad (botón ℹ️)', 'pendiente');
+                return false;
+            }
+            alert('Indica el país y la comunidad o región en la información del sector.');
+            setMostrarModalCroquis(true);
+            return false;
+        }
         if (!usuario) {
-            pedirAuth(() => ejecutarGuardado());
-            return;
+            pedirAuth(() => ejecutarGuardado({ silencioso }));
+            return false;
         }
         if (esAjeno) {
-            if (!window.confirm('Al guardar, tus cambios se enviarán al propietario del croquis para que los apruebe. ¿Continuar?')) return;
-            guardarComoCapa();
-        } else {
-            ejecutarGuardado();
+            if (!window.confirm('Al guardar, tus cambios se enviarán al propietario del croquis para que los apruebe. ¿Continuar?')) return false;
+            await guardarComoCapa();
+            return false;
         }
+        return ejecutarGuardado({ silencioso });
     };
+
+    const hayCambios = () =>
+        firmaContenido(fotos, infoCroquis, visibilidad) !== firmaGuardada.current
+        || (creando && Boolean(viaActual.inicio))
+        || (esCreandoCombinacion && Boolean(combinacionActual.inicio));
+    hayCambiosRef.current = hayCambios;
+
+    // Estado de partida: lo que llega guardado (o el croquis vacío si es nuevo)
+    useEffect(() => { firmaGuardada.current = firmaContenido(fotos, infoCroquis, visibilidad); }, []); // eslint-disable-line
+
+    // Al crear una vía se guarda el croquis. Se espera a que termine un guardado en curso.
+    useEffect(() => {
+        if (!autoGuardar || guardando) return;
+        setAutoGuardar(false);
+        guardarEnFirebase({ silencioso: true });
+    }, [autoGuardar, guardando]); // eslint-disable-line
+
+    // Aviso al recargar o cerrar la pestaña, y al usar el botón atrás del navegador
+    useEffect(() => {
+        const antesDeSalir = (e) => {
+            if (!hayCambiosRef.current()) return;
+            e.preventDefault();
+            e.returnValue = '';
+        };
+        window.addEventListener('beforeunload', antesDeSalir);
+        registrarSalida?.(() => hayCambiosRef.current());
+        return () => {
+            window.removeEventListener('beforeunload', antesDeSalir);
+            registrarSalida?.(null);
+        };
+    }, []); // eslint-disable-line
+
+    const salir = () => {
+        if (!onExit) return;
+        if (hayCambios()) setConfirmarSalida(true);
+        else onExit();
+    };
+
+    const modalSalida = confirmarSalida && (
+        <div style={st.overlayModal}>
+            <div style={{ ...st.modal, maxWidth: 420 }}>
+                <div style={st.modalHeader}><h3>Cambios sin guardar</h3></div>
+                <div style={st.modalBody}>
+                    <p style={{ color: '#555', marginBottom: 16 }}>Hay cambios en este croquis que aún no se han guardado.</p>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                        <button onClick={async () => { setConfirmarSalida(false); if (await guardarEnFirebase({ silencioso: true })) onExit(); }}
+                            style={{ ...st.btnExito, justifyContent: 'center' }}><Save size={18} /> Guardar y salir</button>
+                        <button onClick={() => { setConfirmarSalida(false); onExit(); }}
+                            style={{ ...st.btnPeligro, justifyContent: 'center' }}>Salir sin guardar</button>
+                        <button onClick={() => setConfirmarSalida(false)}
+                            style={{ background: 'none', border: 'none', color: '#7f8c8d', fontWeight: 'bold', cursor: 'pointer', padding: 8 }}>Seguir editando</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
+
+    const avisoGuardado = aviso && <div style={{ ...st.aviso, background: aviso.tipo === 'ok' ? 'rgba(39,174,96,0.95)' : 'rgba(230,126,34,0.95)' }}>{aviso.texto}</div>;
 
     // ─── VISOR ───
     const handleWheel = useCallback((e) => {
@@ -644,6 +770,7 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
         setVias(nuevasVias);
         setCreando(false);
         setHerramienta('PAN');
+        if (!esAjeno) setAutoGuardar(true);
     };
 
     const guardarCombinacion = () => {
@@ -652,6 +779,7 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
         setCombinaciones(prev => [...prev, { ...combinacionActual, id: Date.now() }]);
         setEsCreandoCombinacion(false);
         setHerramienta('PAN');
+        if (!esAjeno) setAutoGuardar(true);
     };
 
     // ─── EDICIÓN DE VÍAS ───
@@ -749,10 +877,11 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
                         </div>
                     )}
                     {onExit && (
-                        <button onClick={onExit} style={{ marginTop: 20, background: 'none', border: 'none', color: '#95a5a6', cursor: 'pointer', fontWeight: 'bold' }}>
+                        <button onClick={salir} style={{ marginTop: 20, background: 'none', border: 'none', color: '#95a5a6', cursor: 'pointer', fontWeight: 'bold' }}>
                             Cancelar y volver
                         </button>
                     )}
+                    {modalSalida}
                 </div>
             </div>
         );
@@ -782,13 +911,15 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
     // ─── RENDER: EDITOR PRINCIPAL ───
     return (
         <div style={st.appContainer}>
+            {modalSalida}
+            {avisoGuardado}
 
             {/* BARRAS SUPERIORES: en móvil se pueden ocultar para ganar espacio */}
             <div style={ocultarBarras ? { display: 'none' } : { flexShrink: 0 }}>
             {/* TOPBAR */}
             <div style={esMovil ? { ...st.topbar, flexWrap: 'nowrap', padding: '6px 8px' } : st.topbar}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                    <button onClick={() => (imagenUrl || foto.soloLista) ? (onExit ? onExit() : setImagenUrl(null)) : null} style={st.btnIcono} title="Volver">
+                    <button onClick={() => (imagenUrl || foto.soloLista) ? (onExit ? salir() : setImagenUrl(null)) : null} style={st.btnIcono} title="Volver">
                         <ArrowLeft size={20} />
                     </button>
                     <div style={esMovil ? { display: 'none' } : undefined}>
@@ -1514,6 +1645,8 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
                                     )}
                                 </div>
                             </div>
+                            <SelectorRegion pais={infoCroquis.pais} comunidad={infoCroquis.comunidad} obligatorio={!croquísId.current}
+                                onChange={r => setInfoCroquis(p => ({ ...p, ...r }))} inputStyle={st.input} labelStyle={st.label} />
                             <div style={{ marginBottom: 15 }}>
                                 <label style={st.label}>Ubicación exacta en el mapa</label>
                                 <LocationPicker
@@ -1553,6 +1686,11 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
                                 <textarea value={infoCroquis.masInfo} onChange={e => setInfoCroquis(p => ({ ...p, masInfo: e.target.value }))}
                                     style={{ ...st.input, height: 72, resize: 'none' }} placeholder="Información adicional del sector..." />
                             </div>
+                            <div style={{ marginBottom: 15 }}>
+                                <label style={st.label}>Bibliografía y enlaces de interés</label>
+                                <EditorReferencias referencias={infoCroquis.referencias || []} inputStyle={st.input}
+                                    onChange={refs => setInfoCroquis(p => ({ ...p, referencias: refs }))} />
+                            </div>
                             <button onClick={() => setMostrarModalCroquis(false)} style={{ ...st.btnPrimario, width: '100%' }}>Cerrar</button>
                         </div>
                     </div>
@@ -1578,7 +1716,11 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
                                 }))} />
                             </div>
                             <InputModal label="Número en la pared" value={viaActual.info.numero} onChange={v => setViaActual(p => ({ ...p, info: { ...p.info, numero: v } }))} ph="Ej: 7a (deja vacío para numeración automática)" />
-                            <InputModal label="Equipador/a" value={viaActual.info.equipador} onChange={v => setViaActual(p => ({ ...p, info: { ...p.info, equipador: v } }))} ph="Nombre de quien equipó" />
+                            <div style={{ marginBottom: 15 }}>
+                                <label style={st.label}>Equipador/a</label>
+                                <EquipadorInput nombre={viaActual.info.equipador} inputStyle={st.input}
+                                    onChange={(n, id) => setViaActual(p => ({ ...p, info: { ...p.info, equipador: n, equipadorId: id } }))} />
+                            </div>
                             <InputModal label="Año" value={viaActual.info.anio} onChange={v => setViaActual(p => ({ ...p, info: { ...p.info, anio: v } }))} type="number" ph="Ej: 2018" />
                             <label style={st.label}>Información adicional</label>
                             <textarea value={viaActual.info.info} onChange={e => setViaActual(p => ({ ...p, info: { ...p.info, info: e.target.value } }))}
@@ -1754,10 +1896,11 @@ export default function CroquisEscalada({ onExit, croquisInicial }) {
                                 value={vias[editandoInfoViaIdx].info?.numero || ''}
                                 onChange={v => setVias(prev => { const c = [...prev]; c[editandoInfoViaIdx] = { ...c[editandoInfoViaIdx], info: { ...c[editandoInfoViaIdx].info, numero: v } }; return c; })}
                                 ph="Ej: 7a (deja vacío para numeración automática)" />
-                            <InputModal label="Equipador/a"
-                                value={vias[editandoInfoViaIdx].info?.equipador || ''}
-                                onChange={v => setVias(prev => { const c = [...prev]; c[editandoInfoViaIdx] = { ...c[editandoInfoViaIdx], info: { ...c[editandoInfoViaIdx].info, equipador: v } }; return c; })}
-                                ph="Nombre de quien equipó" />
+                            <div style={{ marginBottom: 15 }}>
+                                <label style={st.label}>Equipador/a</label>
+                                <EquipadorInput nombre={vias[editandoInfoViaIdx].info?.equipador || ''} inputStyle={st.input}
+                                    onChange={(n, id) => setVias(prev => { const c = [...prev]; c[editandoInfoViaIdx] = { ...c[editandoInfoViaIdx], info: { ...c[editandoInfoViaIdx].info, equipador: n, equipadorId: id } }; return c; })} />
+                            </div>
                             <InputModal label="Año"
                                 value={vias[editandoInfoViaIdx].info?.anio || ''}
                                 onChange={v => setVias(prev => { const c = [...prev]; c[editandoInfoViaIdx] = { ...c[editandoInfoViaIdx], info: { ...c[editandoInfoViaIdx].info, anio: v } }; return c; })}
@@ -2157,6 +2300,7 @@ const st = {
     controlesFlotantes: { position: 'absolute', top: 8, right: 8, zIndex: 5, display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6 },
     btnFlotante: { width: 40, height: 40, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(44,62,80,0.85)', color: 'white', border: 'none', borderRadius: 8, cursor: 'pointer' },
     herramientaFlotante: { background: 'rgba(231,76,60,0.9)', color: 'white', borderRadius: 6, padding: '3px 7px', fontSize: '0.7rem', fontWeight: 'bold' },
+    aviso: { position: 'fixed', bottom: 56, left: '50%', transform: 'translateX(-50%)', zIndex: 2500, background: 'rgba(39,174,96,0.95)', color: 'white', padding: '8px 16px', borderRadius: 20, fontWeight: 'bold', fontSize: '0.88rem', boxShadow: '0 4px 12px rgba(0,0,0,0.25)', pointerEvents: 'none' },
     barraPanel: { background: 'white', display: 'flex', borderTop: '1px solid #dfe6e9', boxShadow: '0 -2px 6px rgba(0,0,0,0.1)', position: 'relative' },
     btnBarraPanel: { flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, padding: '9px 12px', background: 'none', border: 'none', color: '#2c3e50', fontWeight: 'bold', fontSize: '0.85rem', cursor: 'pointer' },
     divider: { width: 1, height: 30, background: 'rgba(255,255,255,0.2)', margin: '0 4px' },

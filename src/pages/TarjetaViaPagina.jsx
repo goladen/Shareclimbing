@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Plus, Minus, Save, Trash2, MapPin, MousePointer2, CheckCircle } from 'lucide-react';
-import { doc, getDoc, runTransaction, serverTimestamp, setDoc } from 'firebase/firestore';
+import { Plus, Minus, Send, Trash2, MapPin, MousePointer2, CheckCircle } from 'lucide-react';
+import { addDoc, collection, doc, getDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
-import { useAuth } from '../contexts/AuthContext';
+import EquipadorInput from '../components/EquipadorInput';
 import { GradeSelector } from '../CroquisEscalada';
 import { generarCurvaSuave } from '../components/CroquisImagen';
 
@@ -95,12 +95,16 @@ function TrazadoVia({ foto, otrasVias, inicio, fin, intermedios, color, herramie
 }
 
 export default function TarjetaViaPagina({ token, onSalir }) {
-    const { usuario, cargando: cargandoAuth, setModalAuth } = useAuth();
     const [estado, setEstado] = useState('cargando'); // cargando | listo | invalida
     const [tarjeta, setTarjeta] = useState(null);
     const [contexto, setContexto] = useState(null); // { titulo, foto, otrasVias, color }
     const [nombre, setNombre] = useState('');
     const [grado, setGrado] = useState('');
+    const [numero, setNumero] = useState('');
+    const [equipador, setEquipador] = useState({ nombre: '', id: null });
+    const [anio, setAnio] = useState('');
+    const [infoExtra, setInfoExtra] = useState('');
+    const [autorNombre, setAutorNombre] = useState('');
     const [inicio, setInicio] = useState(null);
     const [fin, setFin] = useState(null);
     const [intermedios, setIntermedios] = useState([]);
@@ -131,6 +135,10 @@ export default function TarjetaViaPagina({ token, onSalir }) {
                 });
                 setNombre(via.info?.nombre || '');
                 setGrado(via.info?.grado || '');
+                setNumero(via.info?.numero || '');
+                setEquipador({ nombre: via.info?.equipador || '', id: via.info?.equipadorId || null });
+                setAnio(via.info?.anio || '');
+                setInfoExtra(via.info?.info || '');
                 setInicio(via.inicio || null);
                 setFin(via.fin || null);
                 setIntermedios(via.intermedios || []);
@@ -161,46 +169,39 @@ export default function TarjetaViaPagina({ token, onSalir }) {
         setSeleccion(null);
     };
 
-    const guardar = async () => {
-        if (!usuario) { setModalAuth(true); return; }
+    // Sin registro: la propuesta llega a quien compartió la tarjeta, que decide si se aplica
+    const enviar = async () => {
+        if (!autorNombre.trim()) { setMensaje({ tipo: 'error', texto: 'Escribe tu nombre para que sepan quién propone el cambio.' }); return; }
         if (!nombre.trim()) { setMensaje({ tipo: 'error', texto: 'La vía necesita un nombre.' }); return; }
         if (contexto.foto.imagenUrl && (!inicio || !fin)) { setMensaje({ tipo: 'error', texto: 'El trazado necesita punto de inicio y de fin.' }); return; }
         setGuardando(true);
         setMensaje(null);
         try {
-            // Registro con el que las reglas de Firestore permiten a esta persona editar el croquis
-            await setDoc(doc(db, 'croquis_escalada', tarjeta.croquisId, 'editores_via', usuario.uid), { token });
-            const ref = doc(db, 'croquis_escalada', tarjeta.croquisId);
-            // Transacción: se relee el croquis para no pisar cambios hechos en otras vías
-            await runTransaction(db, async (tx) => {
-                const snap = await tx.get(ref);
-                if (!snap.exists()) throw new Error('El croquis ya no existe.');
-                const datos = snap.data();
-                let encontrada = false;
-                const fotos = fotosDeDatos(datos).map(f => ({
-                    ...f,
-                    vias: (f.vias || []).map(v => {
-                        if (v.id !== tarjeta.viaId) return v;
-                        encontrada = true;
-                        return {
-                            ...v,
-                            inicio, fin, intermedios,
-                            info: { ...v.info, nombre: nombre.trim(), grado },
-                            textos: (v.textos || []).map(t => t.type === 'grado' ? { ...t, text: grado } : t),
-                        };
-                    }),
-                }));
-                if (!encontrada) throw new Error('Esta vía ya no existe en el croquis.');
-                tx.update(ref, { fotos, vias: fotos[0]?.vias || [], updatedAt: serverTimestamp() });
+            await addDoc(collection(db, 'propuestas_via'), {
+                token,
+                croquisId: tarjeta.croquisId,
+                viaId: tarjeta.viaId,
+                paraUid: tarjeta.creadoPor,
+                autorNombre: autorNombre.trim().slice(0, 60),
+                cambios: {
+                    info: {
+                        nombre: nombre.trim(), grado, numero: numero.trim(),
+                        equipador: equipador.nombre.trim(), equipadorId: equipador.id,
+                        anio: String(anio).trim(), info: infoExtra.trim(),
+                    },
+                    trazado: contexto.foto.imagenUrl ? { inicio, fin, intermedios } : null,
+                },
+                estado: 'pendiente',
+                createdAt: serverTimestamp(),
             });
-            setMensaje({ tipo: 'ok', texto: 'Guardado. El croquis ya está actualizado.' });
+            setMensaje({ tipo: 'ok', texto: 'Propuesta enviada. Se aplicará cuando la acepten.' });
         } catch (e) {
-            setMensaje({ tipo: 'error', texto: 'No se pudo guardar: ' + e.message });
+            setMensaje({ tipo: 'error', texto: 'No se pudo enviar: ' + e.message });
         }
         setGuardando(false);
     };
 
-    if (estado === 'cargando' || cargandoAuth) return <div style={st.pantallaMensaje}>Cargando…</div>;
+    if (estado === 'cargando') return <div style={st.pantallaMensaje}>Cargando…</div>;
     if (estado === 'invalida') {
         return (
             <div style={st.pantallaMensaje}>
@@ -217,17 +218,34 @@ export default function TarjetaViaPagina({ token, onSalir }) {
                     <div style={{ color: 'white', fontWeight: 'bold' }}>Tarjeta de vía</div>
                     {contexto.titulo && <div style={{ color: 'rgba(255,255,255,0.6)', fontSize: '0.78rem', overflowWrap: 'anywhere' }}>{contexto.titulo}</div>}
                 </div>
-                <button onClick={guardar} disabled={guardando} style={st.btnGuardar}>
-                    <Save size={16} /> {guardando ? 'Guardando…' : usuario ? 'Guardar' : 'Entrar para guardar'}
+                <button onClick={enviar} disabled={guardando} style={st.btnGuardar}>
+                    <Send size={16} /> {guardando ? 'Enviando…' : 'Enviar propuesta'}
                 </button>
             </div>
             <div style={st.scroll}>
                 <div style={st.tarjeta}>
                     {mensaje && <div style={mensaje.tipo === 'ok' ? st.ok : st.error}>{mensaje.texto}</div>}
-                    <label style={st.label}>Nombre</label>
+                    <label style={st.label}>Tu nombre *</label>
+                    <input value={autorNombre} onChange={e => { setAutorNombre(e.target.value); setMensaje(null); }} maxLength={60} placeholder="Para que sepan quién propone el cambio" style={st.input} />
+                    <p style={st.ayuda}>Tu propuesta llegará a quien compartió esta vía. Si la acepta, aparecerás como colaborador.</p>
+                    <label style={st.label}>Nombre de la vía</label>
                     <input value={nombre} onChange={e => { setNombre(e.target.value); setMensaje(null); }} placeholder="Nombre de la vía" style={st.input} />
                     <label style={st.label}>Grado</label>
                     <GradeSelector value={grado} onChange={v => { setGrado(v); setMensaje(null); }} />
+                    <div style={st.dosColumnas}>
+                        <div>
+                            <label style={st.label}>Número en la pared</label>
+                            <input value={numero} onChange={e => setNumero(e.target.value)} placeholder="Ej: 7a" style={st.input} />
+                        </div>
+                        <div>
+                            <label style={st.label}>Año</label>
+                            <input type="number" value={anio} onChange={e => setAnio(e.target.value)} placeholder="Ej: 2018" style={st.input} />
+                        </div>
+                    </div>
+                    <label style={st.label}>Equipador/a</label>
+                    <EquipadorInput nombre={equipador.nombre} onChange={(n, id) => setEquipador({ nombre: n, id })} inputStyle={st.input} />
+                    <label style={st.label}>Información adicional</label>
+                    <textarea value={infoExtra} onChange={e => setInfoExtra(e.target.value)} rows={3} placeholder="Ej: 10 cintas, paso duro en la 3ª chapa." style={{ ...st.input, resize: 'vertical', fontFamily: 'inherit' }} />
 
                     {contexto.foto.imagenUrl && (
                         <>
@@ -274,6 +292,7 @@ const st = {
     btnHerramienta: { display: 'flex', alignItems: 'center', gap: 4, padding: '7px 10px', border: '2px solid', borderRadius: 8, fontWeight: 'bold', fontSize: '0.8rem', cursor: 'pointer' },
     btnCuadrado: { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 3, minWidth: 34, height: 34, background: 'white', color: '#2c3e50', border: '1px solid #bdc3c7', borderRadius: 7, cursor: 'pointer', fontSize: '0.76rem', fontWeight: 'bold' },
     ayuda: { color: '#7f8c8d', fontSize: '0.76rem', margin: '6px 0' },
+    dosColumnas: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 },
     lienzo: { overflow: 'auto', maxHeight: '70dvh', borderRadius: 8, background: '#ecf0f1' },
     ok: { background: '#eafaf1', color: '#1e8449', padding: '9px 12px', borderRadius: 8, fontSize: '0.88rem' },
     error: { background: '#fdecea', color: '#c0392b', padding: '9px 12px', borderRadius: 8, fontSize: '0.88rem' },

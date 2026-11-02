@@ -3,9 +3,14 @@ import { ArrowLeft, Share2, LayoutTemplate, Save, X, ArrowUp, ArrowDown, Trash2,
 import { collection, doc, getDoc, getDocs, updateDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
+import { useAccesoDirecto } from '../utils/accesoDirecto';
+import BotonAccesoDirecto from '../components/BotonAccesoDirecto';
 import CroquisImagen from '../components/CroquisImagen';
 import { ItinerarioVista } from '../components/ItinerarioMapa';
 import { DesvincularCroquisModal } from '../components/AsociacionEscuela';
+import { EquipadorYColaboradores } from '../components/EquipadorInput';
+import { textoRegion } from '../utils/regiones';
+import { ListaReferencias } from '../components/Referencias';
 import { normalizarNombre as normalizar, nombreCroquis } from '../utils/escuelas';
 
 const POSICIONES_VIAS = [
@@ -22,8 +27,11 @@ const TIPOS_AGREGABLES = [
     { tipo: 'info', label: 'Información' },
     { tipo: 'mapa', label: 'Mapa e itinerarios' },
     { tipo: 'sectores', label: 'Lista de sectores' },
+    { tipo: 'referencias', label: 'Bibliografía y enlaces' },
     { tipo: 'texto', label: 'Texto libre' },
 ];
+
+const CLAVE_REFERENCIAS = 'bloque:referencias';
 
 let contadorBloques = 0;
 const crearBloque = (tipo, extra = {}) => ({
@@ -52,12 +60,13 @@ function paginaPorDefecto(fotos, esSector) {
         crearBloque('portada'),
         crearBloque('info', { ancho: 6 }),
         crearBloque('mapa', { ancho: 6 }),
+        crearBloque('referencias'),
         ...(esSector ? [] : [crearBloque('sectores')]),
         ...fotos.map(f => crearBloque('croquis', { fotoClave: f.clave })),
     ];
 }
 
-export default function EscuelaPagina({ escuelaId, sector, onVolver, onVerSector, onVerCroquis }) {
+export default function EscuelaPagina({ escuelaId, sector, onVolver, onVerSector, onVerCroquis, onVerEquipador }) {
     const { usuario } = useAuth();
     const [escuela, setEscuela] = useState(null);
     const [croquisEscuela, setCroquisEscuela] = useState([]);
@@ -134,6 +143,10 @@ export default function EscuelaPagina({ escuelaId, sector, onVolver, onVerSector
             const conocidos = new Set(guardada.conocidos || []);
             const nuevos = fotos.filter(f => !conocidos.has(f.clave)).map(f => crearBloque('croquis', { fotoClave: f.clave }));
             resultado = [...guardada.bloques, ...nuevos];
+            // Páginas diseñadas antes de existir este apartado: se añade al final una vez
+            if (!(guardada.conocidos || []).includes(CLAVE_REFERENCIAS) && !resultado.some(b => b.tipo === 'referencias')) {
+                resultado.push(crearBloque('referencias'));
+            }
         } else {
             resultado = paginaPorDefecto(fotos, esSector);
         }
@@ -156,7 +169,12 @@ export default function EscuelaPagina({ escuelaId, sector, onVolver, onVerSector
             horarioSol: primerValor('horarioSol'),
             mejorEpoca: primerValor('mejorEpoca'),
             masInfo: primerValor('masInfo'),
+            // Referencias de todos los croquis del sector, sin repetir
+            referencias: [...new Map(croquisPagina.flatMap(c => c.infoCroquis?.referencias || [])
+                .map(r => [`${r.url}|${r.titulo}`, r])).values()],
             mapsUrl: primerValor('mapsUrl'),
+            pais: primerValor('pais') || escuela.pais,
+            comunidad: primerValor('comunidad') || escuela.comunidad,
         };
     }, [escuela, esSector, croquisPagina, fotos, sector]);
 
@@ -208,7 +226,7 @@ export default function EscuelaPagina({ escuelaId, sector, onVolver, onVerSector
     const guardarDiseno = async () => {
         setGuardando(true);
         try {
-            const pagina = { bloques, conocidos: fotos.map(f => f.clave) };
+            const pagina = { bloques, conocidos: [...fotos.map(f => f.clave), CLAVE_REFERENCIAS] };
             const cambios = esSector
                 ? { paginasSector: { ...(escuela.paginasSector || {}), [claveSector]: pagina } }
                 : { pagina };
@@ -244,6 +262,8 @@ export default function EscuelaPagina({ escuelaId, sector, onVolver, onVerSector
         }
     };
 
+    useAccesoDirecto(escuela ? datos.titulo : null);
+
     if (cargando) return <div style={st.mensaje}>Cargando…</div>;
     if (!escuela) {
         return (
@@ -258,6 +278,9 @@ export default function EscuelaPagina({ escuelaId, sector, onVolver, onVerSector
         switch (b.tipo) {
             case 'portada': return <BloquePortada datos={datos} alto={b.alto} />;
             case 'info': return <BloqueInfo datos={datos} />;
+            case 'referencias': return datos.referencias?.length
+                ? <><h2 style={st.tituloBloque}>Bibliografía y enlaces</h2><ListaReferencias referencias={datos.referencias} /></>
+                : <div style={{ color: '#95a5a6', fontStyle: 'italic' }}>Sin bibliografía ni enlaces. Añádelos al editar {esSector ? 'la información del sector' : 'la escuela'}.</div>;
             case 'mapa': return <ItinerarioVista rutas={mapa.rutas} marcadores={mapa.marcadores} alto={b.alto} />;
             case 'sectores': return <BloqueSectores sectores={sectores} onVerSector={onVerSector} />;
             case 'texto': return disenando
@@ -277,6 +300,7 @@ export default function EscuelaPagina({ escuelaId, sector, onVolver, onVerSector
     // Un croquis borrado o hecho privado deja de mostrarse; un texto vacío solo se ve al diseñar
     const bloquesVisibles = bloques.filter(b =>
         (b.tipo !== 'croquis' || fotoPorClave[b.fotoClave]) && (disenando || b.tipo !== 'texto' || b.texto?.trim())
+        && (disenando || b.tipo !== 'referencias' || datos.referencias?.length > 0)
     );
 
     return (
@@ -290,6 +314,7 @@ export default function EscuelaPagina({ escuelaId, sector, onVolver, onVerSector
                     </div>
                 </div>
                 <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                    {!disenando && <BotonAccesoDirecto nombre={datos.titulo} estilo={st.btnIcono} />}
                     {disenando ? (
                         <>
                             <button onClick={cancelarDiseno} style={{ ...st.btnBarra, background: 'rgba(255,255,255,0.12)' }}><X size={16} /> Cancelar</button>
@@ -378,7 +403,7 @@ export default function EscuelaPagina({ escuelaId, sector, onVolver, onVerSector
                         </div>
                         <div style={{ padding: 20, lineHeight: 1.7 }}>
                             <p><strong>Grado:</strong> <span style={{ color: '#e74c3c', fontWeight: 'bold', fontSize: '1.1rem' }}>{viaSeleccionada.info?.grado || '–'}</span></p>
-                            <p><strong>Equipador:</strong> {viaSeleccionada.info?.equipador || 'Desconocido'}</p>
+                            <EquipadorYColaboradores info={viaSeleccionada.info} onVerEquipador={onVerEquipador} />
                             <p><strong>Año:</strong> {viaSeleccionada.info?.anio || '–'}</p>
                             {viaSeleccionada.info?.info && <p style={{ whiteSpace: 'pre-wrap', marginTop: 8 }}>{viaSeleccionada.info.info}</p>}
                         </div>
@@ -464,11 +489,12 @@ function BloquePortada({ datos, alto }) {
 }
 
 function BloqueInfo({ datos }) {
-    const hayDatos = datos.acceso || datos.restricciones || datos.horarioSol || datos.mejorEpoca || datos.masInfo || datos.mapsUrl;
+    const hayDatos = textoRegion(datos) || datos.acceso || datos.restricciones || datos.horarioSol || datos.mejorEpoca || datos.masInfo || datos.mapsUrl;
     if (!hayDatos) return <div style={{ color: '#95a5a6', fontStyle: 'italic' }}>Aún no hay información.</div>;
     return (
         <div style={{ color: '#2c3e50', lineHeight: 1.55 }}>
             <h2 style={st.tituloBloque}>Información</h2>
+            {textoRegion(datos) && <p style={st.lineaInfo}><MapPin size={15} /> {textoRegion(datos)}</p>}
             {datos.horarioSol && <p style={st.lineaInfo}><Sun size={15} /> {datos.horarioSol}</p>}
             {datos.mejorEpoca && <p style={st.lineaInfo}><Calendar size={15} /> {datos.mejorEpoca}</p>}
             {datos.acceso && <p style={{ marginBottom: 10, whiteSpace: 'pre-wrap' }}><strong>Acceso:</strong> {datos.acceso}</p>}

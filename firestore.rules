@@ -32,22 +32,6 @@ service cloud.firestore {
         && get(/databases/$(database)/documents/escuelas/$(request.resource.data.desvinculadoDe)).data.nombre.trim().lower()
              == resource.data.infoCroquis.escuela.trim().lower();
 
-      // Tarjeta de vía: quien está registrado con un enlace vigente de este croquis
-      // puede guardar vías. Las reglas no pueden limitarlo a una sola vía de la lista.
-      allow update: if request.auth != null
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['fotos', 'vias', 'updatedAt'])
-        && exists(/databases/$(database)/documents/croquis_escalada/$(docId)/editores_via/$(request.auth.uid))
-        && exists(/databases/$(database)/documents/tarjetas_via/$(get(/databases/$(database)/documents/croquis_escalada/$(docId)/editores_via/$(request.auth.uid)).data.token));
-
-      match /editores_via/{uid} {
-        allow read: if request.auth != null && (request.auth.uid == uid
-          || request.auth.uid == get(/databases/$(database)/documents/croquis_escalada/$(docId)).data.creadoPor);
-        allow create, update: if request.auth != null && request.auth.uid == uid
-          && get(/databases/$(database)/documents/tarjetas_via/$(request.resource.data.token)).data.croquisId == docId;
-        allow delete: if request.auth != null && (request.auth.uid == uid
-          || request.auth.uid == get(/databases/$(database)/documents/croquis_escalada/$(docId)).data.creadoPor);
-      }
-
       // Comentarios en subcollección
       match /comentarios/{comentId} {
         allow read: if true;
@@ -72,6 +56,35 @@ service cloud.firestore {
             || request.auth.token.email in get(/databases/$(database)/documents/croquis_escalada/$(request.resource.data.croquisId)).data.get('editoresEmail', []));
       allow delete: if request.auth != null && (resource.data.creadoPor == request.auth.uid
         || get(/databases/$(database)/documents/croquis_escalada/$(resource.data.croquisId)).data.creadoPor == request.auth.uid);
+    }
+
+    // Propuestas enviadas desde una tarjeta de vía, sin necesidad de registrarse.
+    // Solo se aceptan con un enlace vigente y van dirigidas a quien lo creó.
+    match /propuestas_via/{id} {
+      function tarjeta() {
+        return get(/databases/$(database)/documents/tarjetas_via/$(request.resource.data.token)).data;
+      }
+      allow create: if request.resource.data.keys().hasOnly(['token', 'croquisId', 'viaId', 'paraUid', 'autorNombre', 'cambios', 'estado', 'createdAt'])
+        && request.resource.data.estado == 'pendiente'
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.autorNombre is string
+        && request.resource.data.autorNombre.size() > 0 && request.resource.data.autorNombre.size() <= 60
+        && request.resource.data.cambios.keys().hasOnly(['info', 'trazado'])
+        && tarjeta().croquisId == request.resource.data.croquisId
+        && tarjeta().viaId == request.resource.data.viaId
+        && tarjeta().creadoPor == request.resource.data.paraUid;
+      allow read, delete: if request.auth != null && resource.data.paraUid == request.auth.uid;
+      allow update: if request.auth != null && resource.data.paraUid == request.auth.uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['estado']);
+    }
+
+    // Fichas de equipadores: se crean al indicar el equipador de una vía
+    match /equipadores/{id} {
+      allow read: if true;
+      allow create: if request.auth != null
+        && request.resource.data.creadoPor == request.auth.uid
+        && request.resource.data.nombre is string && request.resource.data.nombre.size() > 0;
+      allow update, delete: if request.auth != null && resource.data.creadoPor == request.auth.uid;
     }
 
     match /solicitudes_edicion/{id} {
@@ -114,12 +127,19 @@ service cloud.firestore {
           && request.auth.uid in rocodromo().miembros;
         allow delete: if request.auth != null
           && (resource.data.creadoPor == request.auth.uid || rocodromo().creadoPor == request.auth.uid);
+        // El autor del bloque o del rocódromo cambia el bloque, no los ascensos de otros
         allow update: if request.auth != null
-          && (resource.data.creadoPor == request.auth.uid || rocodromo().creadoPor == request.auth.uid);
+          && (resource.data.creadoPor == request.auth.uid || rocodromo().creadoPor == request.auth.uid)
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['nombre', 'grado', 'presas']);
 
-        // Marcar o desmarcar «hecho»: solo el propio usuario
+        // Marcar o desmarcar «hecho» con su valoración: solo el propio usuario
         allow update: if request.auth != null
-          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['encadenadoPor'])
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['encadenadoPor', 'valoraciones'])
+          && request.resource.data.get('valoraciones', {}).diff(resource.data.get('valoraciones', {})).affectedKeys().hasOnly([request.auth.uid])
+          && (!(request.auth.uid in request.resource.data.get('valoraciones', {}))
+              || (request.resource.data.valoraciones[request.auth.uid].estrellas is int
+                  && request.resource.data.valoraciones[request.auth.uid].estrellas >= 1
+                  && request.resource.data.valoraciones[request.auth.uid].estrellas <= 5))
           && request.resource.data.encadenadoPor.toSet().difference(resource.data.get('encadenadoPor', []).toSet()).hasOnly([request.auth.uid])
           && resource.data.get('encadenadoPor', []).toSet().difference(request.resource.data.encadenadoPor.toSet()).hasOnly([request.auth.uid]);
       }

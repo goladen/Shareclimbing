@@ -6,6 +6,13 @@ import { Search, Plus, LogIn, LogOut, Layers, Mountain, User } from 'lucide-reac
 import logo from '../assets/logotopoclimbing.png';
 import EscuelaModal from '../components/EscuelaModal';
 import RocodromoModal from '../components/RocodromoModal';
+import { cargarEquipadores, esDeEquipador, fotosDeCroquis } from '../utils/equipadores';
+import { textoRegion } from '../utils/regiones';
+import { useAccesoDirecto } from '../utils/accesoDirecto';
+import BotonAccesoDirecto from '../components/BotonAccesoDirecto';
+import { TarjetasJuegos } from './JuegoPikt';
+
+const NOMBRE_VISTA = { croquis: 'TopoClimbing', escuelas: 'Escuelas', rocodromos: 'Rocódromos', equipadores: 'Equipadores', juegos: 'Juegos' };
 import NotificacionesCampana from '../components/NotificacionesCampana';
 import { normalizarNombre, contarSectores } from '../utils/escuelas';
 
@@ -39,6 +46,8 @@ const iconoEscuela = new L.DivIcon({
     iconAnchor: [14, 14],
 });
 
+const esTactil = window.matchMedia('(pointer: coarse)').matches;
+
 const iconoRocodromo = new L.DivIcon({
     className: '',
     html: `<div style="background:#3498db;color:white;padding:5px 9px;border-radius:12px;font-size:13px;font-weight:bold;white-space:nowrap;box-shadow:0 2px 8px rgba(0,0,0,0.35);border:2px solid white;">🧗</div>`,
@@ -70,7 +79,7 @@ function RecenterMap({ coords }) {
     return null;
 }
 
-export default function HomePage({ onCrearCroquis, onVerCroquis, onVerPerfil, onVerEscuela, onVerRocodromo, vistaInicial }) {
+export default function HomePage({ onCrearCroquis, onVerCroquis, onVerPerfil, onVerEscuela, onVerRocodromo, onVerEquipador, onAbrirJuego, vistaInicial }) {
     const { usuario, cerrarSesion, setModalAuth } = useAuth();
     const [croquis, setCroquis] = useState([]);
     const [busqueda, setBusqueda] = useState('');
@@ -82,7 +91,15 @@ export default function HomePage({ onCrearCroquis, onVerCroquis, onVerPerfil, on
     const [escuelaEditando, setEscuelaEditando] = useState(null);
     const [vistaActiva, setVistaActiva] = useState(vistaInicial || 'croquis'); // 'croquis' | 'escuelas' | 'rocodromos'
     const [rocodromos, setRocodromos] = useState([]);
+    const [equipadores, setEquipadores] = useState([]);
     const [mostrarModalRocodromo, setMostrarModalRocodromo] = useState(false);
+
+    // Cada pestaña tiene su propio enlace (#/rocodromos, #/escuelas…) para compartirla o guardarla en el móvil
+    useEffect(() => {
+        const hash = vistaActiva === 'croquis' ? '' : `#/${vistaActiva}`;
+        if (window.location.hash !== hash) window.history.replaceState(null, '', window.location.pathname + hash);
+    }, [vistaActiva]);
+    useAccesoDirecto(NOMBRE_VISTA[vistaActiva]);
 
     const cargarCroquis = useCallback(async () => {
         setCargando(true);
@@ -109,7 +126,7 @@ export default function HomePage({ onCrearCroquis, onVerCroquis, onVerPerfil, on
         } catch (e) { console.error(e); }
     }, []);
 
-    useEffect(() => { cargarCroquis(); cargarEscuelas(); cargarRocodromos(); }, [cargarCroquis, cargarEscuelas, cargarRocodromos]);
+    useEffect(() => { cargarCroquis(); cargarEscuelas(); cargarRocodromos(); cargarEquipadores({ refrescar: true }).then(setEquipadores); }, [cargarCroquis, cargarEscuelas, cargarRocodromos]);
 
     const eliminarCroquis = async (id) => {
         if (!window.confirm('¿Eliminar este croquis? Esta acción no se puede deshacer.')) return;
@@ -168,7 +185,7 @@ export default function HomePage({ onCrearCroquis, onVerCroquis, onVerPerfil, on
     );
 
     return (
-        <div style={st.app}>
+        <div className="home-app" style={st.app}>
             {/* NAVBAR */}
             <nav style={st.nav}>
                 <div style={st.navLogo}>
@@ -184,7 +201,7 @@ export default function HomePage({ onCrearCroquis, onVerCroquis, onVerPerfil, on
                         style={st.inputBusqueda}
                     />
                 </div>
-                <div style={st.navAcciones}>
+                <div className="home-nav-acciones" style={st.navAcciones}>
                     <button onClick={() => setMostrarModalEscuela(true)} style={st.btnEscuela}>
                         <Mountain size={18} /> Nueva escuela
                     </button>
@@ -204,9 +221,10 @@ export default function HomePage({ onCrearCroquis, onVerCroquis, onVerPerfil, on
                                     } catch (e) { console.error(e); }
                                 }}
                                 onDesvinculado={cargarCroquis}
+                                onPropuestaAplicada={cargarCroquis}
                             />
-                            <button onClick={onVerPerfil} style={{ ...st.btnSalir, color: 'rgba(255,255,255,0.85)' }} title="Mi perfil"><User size={18} /></button>
-                            <div style={{ ...st.avatarCircle, cursor: 'pointer' }} onClick={onVerPerfil}>{(usuario.displayName || usuario.email)[0].toUpperCase()}</div>
+                            <button onClick={onVerPerfil} className="ocultar-movil" style={{ ...st.btnSalir, color: 'rgba(255,255,255,0.85)' }} title="Perfil"><User size={18} /></button>
+                            <button onClick={onVerPerfil} title="Mi perfil" style={{ ...st.avatarCircle, border: 'none', cursor: 'pointer' }}>{(usuario.displayName || usuario.email)[0].toUpperCase()}</button>
                             <button onClick={cerrarSesion} style={st.btnSalir} title="Cerrar sesión"><LogOut size={16} /></button>
                         </div>
                     ) : (
@@ -218,7 +236,7 @@ export default function HomePage({ onCrearCroquis, onVerCroquis, onVerPerfil, on
             </nav>
 
             {/* MAPA */}
-            <div style={st.mapaWrapper}>
+            <div className="home-mapa" style={st.mapaWrapper}>
                 {/* Toggle de capa flotante sobre el mapa */}
                 <div style={{ position: 'absolute', top: 10, right: 10, zIndex: 1000, display: 'flex', borderRadius: 8, overflow: 'hidden', boxShadow: '0 2px 8px rgba(0,0,0,0.3)', border: '1px solid rgba(255,255,255,0.4)' }}>
                     {Object.entries(CAPAS_MAPA).map(([key, c]) => (
@@ -228,11 +246,14 @@ export default function HomePage({ onCrearCroquis, onVerCroquis, onVerPerfil, on
                         </button>
                     ))}
                 </div>
+                {esTactil && <div style={st.avisoMapa}>Usa dos dedos para mover el mapa</div>}
                 <MapContainer
                     center={[40.416, -3.703]}
                     zoom={6}
                     style={{ width: '100%', height: '100%' }}
                     zoomControl={true}
+                    // En pantallas táctiles un dedo desplaza la página y dos mueven o acercan el mapa
+                    dragging={!esTactil}
                 >
                     <TileLayer
                         key={capaMapa}
@@ -272,9 +293,9 @@ export default function HomePage({ onCrearCroquis, onVerCroquis, onVerPerfil, on
             </div>
 
             {/* LISTA */}
-            <div style={st.lista}>
+            <div className="home-lista" style={st.lista}>
                 {/* Tabs */}
-                <div style={st.tabs}>
+                <div className="home-tabs" style={st.tabs}>
                     <button onClick={() => setVistaActiva('croquis')} style={{ ...st.tab, ...(vistaActiva === 'croquis' ? st.tabActivo : {}) }}>
                         Croquis <span style={st.contadorBadge}>{tarjetas.length}</span>
                     </button>
@@ -284,6 +305,13 @@ export default function HomePage({ onCrearCroquis, onVerCroquis, onVerPerfil, on
                     <button onClick={() => setVistaActiva('rocodromos')} style={{ ...st.tab, ...(vistaActiva === 'rocodromos' ? st.tabActivo : {}) }}>
                         Rocódromos <span style={st.contadorBadge}>{rocodromos.length}</span>
                     </button>
+                    <button onClick={() => setVistaActiva('equipadores')} style={{ ...st.tab, ...(vistaActiva === 'equipadores' ? st.tabActivo : {}) }}>
+                        Equipadores <span style={st.contadorBadge}>{equipadores.length}</span>
+                    </button>
+                    <button onClick={() => setVistaActiva('juegos')} style={{ ...st.tab, ...(vistaActiva === 'juegos' ? st.tabActivo : {}) }}>
+                        🎮 Juegos
+                    </button>
+                    <BotonAccesoDirecto nombre={NOMBRE_VISTA[vistaActiva]} estilo={{ ...st.tab, marginLeft: 'auto', color: '#2c3e50' }} />
                 </div>
 
                 {vistaActiva === 'croquis' && (
@@ -293,6 +321,27 @@ export default function HomePage({ onCrearCroquis, onVerCroquis, onVerPerfil, on
                         : <div style={st.grid}>{tarjetas.map(t => t.croquis.length > 1
                             ? <TarjetaSector key={t.clave} grupo={t} onVer={() => onVerEscuela(t.escuela.id, t.croquis[0].infoCroquis.sector.trim())} />
                             : <TarjetaCroquis key={t.clave} croquis={t.croquis[0]} onVer={() => onVerCroquis(t.croquis[0])} onEliminar={() => eliminarCroquis(t.croquis[0].id)} usuario={usuario} />)}</div>
+                )}
+
+                {vistaActiva === 'juegos' && <TarjetasJuegos onAbrir={onAbrirJuego} />}
+
+                {vistaActiva === 'equipadores' && (
+                    equipadores.length === 0
+                        ? <div style={st.sinResultados}>Aún no hay equipadores. Se crean al indicar el equipador de una vía.</div>
+                        : <div style={{ ...st.grid, gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))' }}>
+                            {equipadores
+                                .filter(e => !busqueda || e.nombre?.toLowerCase().includes(busqueda.toLowerCase()))
+                                .sort((a, b) => a.nombre.localeCompare(b.nombre))
+                                .map(e => {
+                                    const n = croquis.reduce((t, c) => t + fotosDeCroquis(c).reduce((m, f) => m + (f.vias || []).filter(v => esDeEquipador(v.info, e)).length, 0), 0);
+                                    return (
+                                        <button key={e.id} onClick={() => onVerEquipador(e.id)} style={{ ...st.tarjeta, border: 'none', padding: '14px 16px', textAlign: 'left', fontSize: '1rem' }}>
+                                            <div style={st.tarjetaTitulo}>🔩 {e.nombre}</div>
+                                            <div style={st.tarjetaEscuela}>{n} {n === 1 ? 'vía' : 'vías'}</div>
+                                        </button>
+                                    );
+                                })}
+                        </div>
                 )}
 
                 {vistaActiva === 'rocodromos' && (
@@ -329,7 +378,8 @@ export default function HomePage({ onCrearCroquis, onVerCroquis, onVerPerfil, on
                         ? <div style={st.sinResultados}>No hay escuelas creadas aún. ¡Crea la primera con el botón "Nueva escuela"!</div>
                         : <div style={st.grid}>
                             {escuelas
-                                .filter(e => !busqueda || e.nombre?.toLowerCase().includes(busqueda.toLowerCase()))
+                                
+                                .filter(e => !busqueda || [e.nombre, e.comunidad, e.pais].some(t => t?.toLowerCase().includes(busqueda.toLowerCase())))
                                 .map(e => (
                                     <TarjetaEscuela key={e.id} escuela={e}
                                         numSectores={contarSectores(croquis.filter(c => normalizarNombre(c.infoCroquis?.escuela) === normalizarNombre(e.nombre)))}
@@ -474,6 +524,7 @@ function TarjetaEscuela({ escuela, numSectores, onCrearCroquis, onVerEscuela, on
             </div>
             <div style={st.tarjetaInfo}>
                 <div style={{ ...st.tarjetaTitulo, color: '#27ae60' }}>{escuela.nombre}</div>
+                {textoRegion(escuela) && <div style={{ ...st.tarjetaEscuela, marginBottom: 2 }}>📍 {textoRegion(escuela)}</div>}
                 {escuela.descripcion && <div style={{ ...st.tarjetaEscuela, fontSize: '0.8rem' }}>{escuela.descripcion.slice(0, 80)}{escuela.descripcion.length > 80 ? '…' : ''}</div>}
                 <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8 }}>
                     <button onClick={() => onVerEscuela(escuela.id)}
@@ -581,6 +632,7 @@ const st = {
     usuarioInfo: { display: 'flex', alignItems: 'center', gap: 8 },
     avatarCircle: { width: 32, height: 32, borderRadius: '50%', background: '#3498db', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 'bold', fontSize: '0.9rem' },
     usuarioNombre: { color: 'white', fontSize: '0.85rem', maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+    avisoMapa: { position: 'absolute', bottom: 8, left: '50%', transform: 'translateX(-50%)', zIndex: 1000, background: 'rgba(44,62,80,0.8)', color: 'white', fontSize: '0.75rem', padding: '4px 10px', borderRadius: 12, pointerEvents: 'none', whiteSpace: 'nowrap' },
     mapaWrapper: { height: '45vh', minHeight: 280, flexShrink: 0, zIndex: 1, position: 'relative' },
     lista: { flex: 1, overflowY: 'auto', padding: '16px 20px' },
     listaHeader: { display: 'flex', alignItems: 'center', marginBottom: 14 },
@@ -593,7 +645,7 @@ const st = {
     tarjetaImg: { height: 140, background: '#ecf0f1', position: 'relative', overflow: 'hidden' },
     tarjetaImgPlaceholder: { display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', fontSize: 48 },
     tarjetaBadge: { position: 'absolute', top: 8, right: 8, background: 'rgba(0,0,0,0.55)', color: 'white', borderRadius: 12, padding: '3px 10px', fontSize: '0.78rem', fontWeight: 'bold' },
-    btnEliminarTarjeta: { background: 'rgba(0,0,0,0.55)', border: 'none', borderRadius: 6, padding: '4px 7px', cursor: 'pointer', fontSize: '0.85rem', lineHeight: 1 },
+    btnEliminarTarjeta: { background: 'rgba(0,0,0,0.55)', border: 'none', borderRadius: 8, padding: '7px 10px', cursor: 'pointer', fontSize: '0.85rem', lineHeight: 1 },
     tarjetaInfo: { padding: '12px 14px' },
     tarjetaTitulo: { fontWeight: 'bold', fontSize: '1rem', color: '#2c3e50', marginBottom: 3 },
     tarjetaEscuela: { color: '#7f8c8d', fontSize: '0.82rem', marginBottom: 6 },

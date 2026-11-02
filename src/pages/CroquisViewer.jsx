@@ -5,9 +5,13 @@ import { db } from '../firebase';
 import { deleteDoc, doc, addDoc, updateDoc, collection, query, where, getDocs, serverTimestamp, arrayUnion, arrayRemove } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
 import ComentariosCroquis from '../components/ComentariosCroquis';
+import { useAccesoDirecto } from '../utils/accesoDirecto';
 import { ItinerarioVista } from '../components/ItinerarioMapa';
 import { AsociarEscuelaModal } from '../components/AsociacionEscuela';
 import CompartirViaModal from '../components/CompartirViaModal';
+import { EquipadorYColaboradores } from '../components/EquipadorInput';
+import { textoRegion } from '../utils/regiones';
+import { ListaReferencias } from '../components/Referencias';
 
 const generarCurvaSuave = (puntos) => {
     if (puntos.length === 0) return "";
@@ -28,7 +32,7 @@ const generarCurvaSuave = (puntos) => {
     return path;
 };
 
-export default function CroquisViewer({ croquis: croquisProp, onVolver, onEditar }) {
+export default function CroquisViewer({ croquis: croquisProp, onVolver, onEditar, onVerEquipador }) {
     const { usuario } = useAuth();
 
     // Copia local para reflejar cambios de editores sin recargar
@@ -75,6 +79,7 @@ export default function CroquisViewer({ croquis: croquisProp, onVolver, onEditar
     const fotoActual = fotos[fotoIdx] || fotos[0];
 
     const info = croquis.infoCroquis || {};
+    useAccesoDirecto(info.sector?.trim() || info.escuela?.trim() || 'Croquis');
     const vias = fotoActual?.vias || [];
     const combinaciones = fotoActual?.combinaciones || [];
     const xRatio = (fotoActual?.srcW && imgSize.w) ? imgSize.w / fotoActual.srcW : 1;
@@ -615,11 +620,13 @@ export default function CroquisViewer({ croquis: croquisProp, onVolver, onEditar
                         </div>
                         <div style={{ ...st.modalBody, maxHeight: '78vh', overflowY: 'auto' }}>
                             {info.escuela && <p><strong>Escuela:</strong> {info.escuela}</p>}
+                            {textoRegion(info) && <p><MapPin size={14} style={{ marginRight: 6 }} />{textoRegion(info)}</p>}
                             {info.horarioSol && <p><Sun size={14} style={{ marginRight: 6 }} />{info.horarioSol}</p>}
                             {info.mejorEpoca && <p><Calendar size={14} style={{ marginRight: 6 }} />{info.mejorEpoca}</p>}
                             {info.acceso && <div style={st.bloque}><strong>Acceso:</strong><p>{info.acceso}</p></div>}
                             {info.restricciones && <div style={{ ...st.bloque, background: '#fef9e7', border: '1px solid #f9ca24' }}><AlertTriangle size={14} /> <strong>Restricciones:</strong><p>{info.restricciones}</p></div>}
                             {info.masInfo && <div style={st.bloque}><strong>Más info:</strong><p>{info.masInfo}</p></div>}
+                            {info.referencias?.length > 0 && <div style={st.bloque}><ListaReferencias referencias={info.referencias} /></div>}
                             {info.itinerario?.length > 0 && (
                                 <div style={{ marginTop: 12, marginBottom: 12 }}>
                                     <ItinerarioVista rutas={[{ nombre: 'Itinerario al sector', puntos: info.itinerario }]} alto={230} />
@@ -681,7 +688,7 @@ export default function CroquisViewer({ croquis: croquisProp, onVolver, onEditar
                         </div>
                         <div style={st.modalBody}>
                             <p><strong>Grado:</strong> <span style={{ color: '#e74c3c', fontWeight: 'bold', fontSize: '1.1rem' }}>{viaSeleccionada.info?.grado || '–'}</span></p>
-                            <p><strong>Equipador:</strong> {viaSeleccionada.info?.equipador || 'Desconocido'}</p>
+                            <EquipadorYColaboradores info={viaSeleccionada.info} onVerEquipador={onVerEquipador} />
                             <p><strong>Año:</strong> {viaSeleccionada.info?.anio || '–'}</p>
                             {viaSeleccionada.info?.info && (
                                 <div style={st.bloque}><strong>Info técnica:</strong><p style={{ whiteSpace: 'pre-wrap' }}>{viaSeleccionada.info.info}</p></div>

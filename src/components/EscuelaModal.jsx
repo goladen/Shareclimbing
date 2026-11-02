@@ -6,6 +6,8 @@ import { useAuth } from '../contexts/AuthContext';
 import LocationPicker from './LocationPicker';
 import { ItinerarioEditor } from './ItinerarioMapa';
 import { normalizarNombre } from '../utils/escuelas';
+import SelectorRegion from './SelectorRegion';
+import { EditorReferencias, limpiarReferencias } from './Referencias';
 import { procesarImagenParaSubir, subirACloudinary, formatearMB, MAX_MB } from '../utils/imagen';
 
 // escuelaEditar: objeto con datos existentes (modo edición), o null (modo creación)
@@ -16,6 +18,8 @@ export default function EscuelaModal({ onClose, onCreada, onEditada, escuelaEdit
     const [descripcion, setDescripcion] = useState(escuelaEditar?.descripcion || '');
     const [acceso, setAcceso] = useState(escuelaEditar?.acceso || '');
     const [restricciones, setRestricciones] = useState(escuelaEditar?.restricciones || '');
+    const [referencias, setReferencias] = useState(escuelaEditar?.referencias || []);
+    const [region, setRegion] = useState({ pais: escuelaEditar?.pais || '', comunidad: escuelaEditar?.comunidad || '' });
     const [lat, setLat] = useState(escuelaEditar?.lat ?? '');
     const [lng, setLng] = useState(escuelaEditar?.lng ?? '');
     const [mapsUrl, setMapsUrl] = useState(escuelaEditar?.mapsUrl || '');
@@ -69,6 +73,8 @@ export default function EscuelaModal({ onClose, onCreada, onEditada, escuelaEdit
 
     const guardar = async () => {
         if (!nombre.trim()) { setError('El nombre de la escuela es obligatorio.'); return; }
+        // Obligatorio al crear; las escuelas anteriores se pueden completar más adelante
+        if (!modoEdicion && (!region.pais.trim() || !region.comunidad.trim())) { setError('Elige el país y la comunidad o región.'); return; }
         if (imagenUrlElegida.trim() && !/^(https?:|data:image\/)/i.test(imagenUrlElegida.trim())) { setError('La URL de la imagen debe empezar por http:// o https://.'); return; }
         if (!usuario) { pedirAuth(() => guardar()); return; }
 
@@ -88,6 +94,9 @@ export default function EscuelaModal({ onClose, onCreada, onEditada, escuelaEdit
                 descripcion: descripcion.trim(),
                 acceso: acceso.trim(),
                 restricciones: restricciones.trim(),
+                referencias: limpiarReferencias(referencias),
+                pais: region.pais.trim(),
+                comunidad: region.comunidad.trim(),
                 lat: lat !== '' ? parseFloat(lat) : null,
                 lng: lng !== '' ? parseFloat(lng) : null,
                 mapsUrl: mapsUrl.trim(),
@@ -131,6 +140,9 @@ export default function EscuelaModal({ onClose, onCreada, onEditada, escuelaEdit
                             placeholder="Ej: Rodellar, Margalef, Siurana…" style={st.input} autoFocus />
                     </Field>
 
+                    <SelectorRegion pais={region.pais} comunidad={region.comunidad} onChange={setRegion} obligatorio={!modoEdicion}
+                        inputStyle={st.input} labelStyle={{ display: 'block', fontWeight: 'bold', color: '#34495e', marginBottom: 6, fontSize: '0.87rem' }} />
+
                     <Field label="Descripción">
                         <textarea value={descripcion} onChange={e => setDescripcion(e.target.value)}
                             placeholder="Breve descripción del área de escalada…" rows={3}
@@ -166,6 +178,10 @@ export default function EscuelaModal({ onClose, onCreada, onEditada, escuelaEdit
                         <textarea value={acceso} onChange={e => setAcceso(e.target.value)}
                             placeholder="Cómo llegar…" rows={2}
                             style={{ ...st.input, resize: 'vertical' }} />
+                    </Field>
+
+                    <Field label="Bibliografía y enlaces de interés">
+                        <EditorReferencias referencias={referencias} onChange={setReferencias} inputStyle={st.input} />
                     </Field>
 
                     <Field label="Restricciones">

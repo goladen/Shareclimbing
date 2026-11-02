@@ -34,7 +34,8 @@ L.Icon.Default.mergeOptions({
 function MapResizer() {
     const map = useMap();
     useEffect(() => {
-        setTimeout(() => map.invalidateSize(), 80);
+        const t = setTimeout(() => map.invalidateSize(), 80);
+        return () => clearTimeout(t);
     }, [map]);
     return null;
 }

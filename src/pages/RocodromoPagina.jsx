@@ -1,8 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { ArrowLeft, Plus, Minus, X, Save, Trash2, Edit, UserPlus, UserMinus, ImagePlus, Check } from 'lucide-react';
-import { addDoc, arrayRemove, arrayUnion, collection, deleteDoc, doc, getDoc, getDocs, serverTimestamp, updateDoc } from 'firebase/firestore';
+import { addDoc, arrayRemove, arrayUnion, collection, deleteDoc, deleteField, doc, getDoc, getDocs, serverTimestamp, updateDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
+import { useAccesoDirecto } from '../utils/accesoDirecto';
+import BotonAccesoDirecto from '../components/BotonAccesoDirecto';
+import { GRADOS_BLOQUE, ListaBloques, ValorarBloqueModal } from '../components/BloquesRocodromo';
 import RocodromoModal, { subirFotosRocodromo, archivoDemasiadoGrande } from '../components/RocodromoModal';
 
 const TIPOS_PRESA = {
@@ -10,7 +13,6 @@ const TIPOS_PRESA = {
     intermedia: { label: 'Intermedia', color: '#f1c40f' },
     fin: { label: 'Final', color: '#e74c3c' },
 };
-const GRADOS_BLOQUE = ['3', '4a', '4b', '4c', '5a', '5b', '5c', '6a', '6a+', '6b', '6b+', '6c', '6c+', '7a', '7a+', '7b', '7b+', '7c', '7c+', '8a', '8a+', '8b', '8b+', '8c'];
 const RADIO_INICIAL = 0.025;
 
 // Foto con círculos. Las posiciones y radios de las presas son fracciones del tamaño
@@ -186,7 +188,7 @@ export default function RocodromoPagina({ rocodromoId, onVolver }) {
     const [cargando, setCargando] = useState(true);
     const [fotoIdx, setFotoIdx] = useState(0);
     const [bloqueId, setBloqueId] = useState(null);
-    const [filtro, setFiltro] = useState('todos');
+    const [valorando, setValorando] = useState(null); // bloque cuyo ascenso se está valorando
     const [editor, setEditor] = useState(null); // { bloque } — bloque null = nuevo
     const [editandoDatos, setEditandoDatos] = useState(false);
     const [subiendo, setSubiendo] = useState('');
@@ -206,6 +208,8 @@ export default function RocodromoPagina({ rocodromoId, onVolver }) {
         })();
     }, [rocodromoId]);
 
+    useAccesoDirecto(rocodromo?.nombre);
+
     if (cargando) return <div style={st.mensaje}>Cargando…</div>;
     if (!rocodromo) {
         return (
@@ -223,7 +227,6 @@ export default function RocodromoPagina({ rocodromoId, onVolver }) {
     const hecho = (b) => Boolean(usuario && (b.encadenadoPor || []).includes(usuario.uid));
 
     const bloquesFoto = bloques.filter(b => b.fotoId === foto?.id);
-    const visibles = bloquesFoto.filter(b => filtro === 'todos' || (filtro === 'hechos') === hecho(b));
     const bloqueActivo = bloquesFoto.find(b => b.id === bloqueId);
 
     const cambiarMembresia = async () => {
@@ -237,15 +240,32 @@ export default function RocodromoPagina({ rocodromoId, onVolver }) {
         } catch (e) { alert('Error: ' + e.message); }
     };
 
-    const marcarHecho = async (b) => {
+    const valorar = (b) => {
         if (!usuario) { setModalAuth(true); return; }
-        const estaba = hecho(b);
+        setValorando(b);
+    };
+
+    // Ascenso con su valoración (estrellas y grado propuesto); null lo quita de mis hechos
+    const guardarAscenso = async (b, valoracion) => {
+        const ref = doc(db, 'rocodromos', rocodromo.id, 'bloques', b.id);
+        const clave = `valoraciones.${usuario.uid}`;
+        const datos = valoracion && {
+            estrellas: valoracion.estrellas,
+            grado: valoracion.grado || '',
+            nombre: usuario.displayName || usuario.email.split('@')[0],
+        };
         try {
-            await updateDoc(doc(db, 'rocodromos', rocodromo.id, 'bloques', b.id), { encadenadoPor: estaba ? arrayRemove(usuario.uid) : arrayUnion(usuario.uid) });
-            setBloques(bs => bs.map(x => x.id !== b.id ? x : {
-                ...x,
-                encadenadoPor: estaba ? x.encadenadoPor.filter(u => u !== usuario.uid) : [...(x.encadenadoPor || []), usuario.uid],
+            await updateDoc(ref, datos
+                ? { encadenadoPor: arrayUnion(usuario.uid), [clave]: datos }
+                : { encadenadoPor: arrayRemove(usuario.uid), [clave]: deleteField() });
+            setBloques(bs => bs.map(x => {
+                if (x.id !== b.id) return x;
+                const valoraciones = { ...(x.valoraciones || {}) };
+                if (datos) valoraciones[usuario.uid] = datos; else delete valoraciones[usuario.uid];
+                const otros = (x.encadenadoPor || []).filter(u => u !== usuario.uid);
+                return { ...x, valoraciones, encadenadoPor: datos ? [...otros, usuario.uid] : otros };
             }));
+            setValorando(null);
         } catch (e) { alert('Error: ' + e.message); }
     };
 
@@ -321,6 +341,7 @@ export default function RocodromoPagina({ rocodromoId, onVolver }) {
                     </div>
                 </div>
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                    <BotonAccesoDirecto nombre={rocodromo.nombre} estilo={st.btnIcono} />
                     {!esPropietario && (
                         <button onClick={cambiarMembresia} style={{ ...st.btnBarra, background: esMiembro ? 'rgba(255,255,255,0.12)' : '#27ae60' }}>
                             {esMiembro ? <><UserMinus size={16} /> Dejar de ser miembro</> : <><UserPlus size={16} /> Hacerme miembro</>}
@@ -379,43 +400,9 @@ export default function RocodromoPagina({ rocodromoId, onVolver }) {
                                     </span>
                                 ))}
                             </div>
-                            {usuario && (
-                                <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
-                                    {[['todos', 'Todos'], ['pendientes', 'Pendientes'], ['hechos', 'Hechos']].map(([id, label]) => (
-                                        <button key={id} onClick={() => setFiltro(id)} style={{ ...st.pestana, ...(filtro === id ? st.pestanaActiva : {}) }}>{label}</button>
-                                    ))}
-                                </div>
-                            )}
-                            {visibles.length === 0 && <div style={st.vacio}>{bloquesFoto.length === 0 ? 'Aún no hay bloques en esta foto.' : 'Ningún bloque con este filtro.'}</div>}
-                            {visibles.map(b => {
-                                const puedeGestionar = usuario && (usuario.uid === b.creadoPor || esPropietario);
-                                const num = (b.encadenadoPor || []).length;
-                                return (
-                                    <div key={b.id} style={{ ...st.bloque, borderColor: b.id === bloqueId ? '#3498db' : '#ecf0f1' }}>
-                                        <button onClick={() => seleccionarBloque(b.id)} style={st.bloqueInfo}>
-                                            <span style={st.grado}>{b.grado}</span>
-                                            <span style={{ flex: 1, minWidth: 0, textAlign: 'left' }}>
-                                                <strong style={{ color: '#2c3e50', overflowWrap: 'anywhere' }}>{b.nombre || 'Bloque sin nombre'}</strong>
-                                                <span style={{ display: 'block', fontSize: '0.76rem', color: '#7f8c8d' }}>
-                                                    por {b.creadoPorNombre} · {num} {num === 1 ? 'lo ha hecho' : 'lo han hecho'}
-                                                </span>
-                                            </span>
-                                        </button>
-                                        <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
-                                            {puedeGestionar && (
-                                                <>
-                                                    <button onClick={() => setEditor({ bloque: b })} style={st.btnFila} title="Editar bloque"><Edit size={14} /></button>
-                                                    <button onClick={() => eliminarBloque(b)} style={{ ...st.btnFila, color: '#e74c3c' }} title="Eliminar bloque"><Trash2 size={14} /></button>
-                                                </>
-                                            )}
-                                            <button onClick={() => marcarHecho(b)} aria-pressed={hecho(b)}
-                                                style={{ ...st.btnHecho, ...(hecho(b) ? st.btnHechoActivo : {}) }}>
-                                                <Check size={14} /> Hecho
-                                            </button>
-                                        </div>
-                                    </div>
-                                );
-                            })}
+                            <ListaBloques bloques={bloquesFoto} usuario={usuario} esPropietario={esPropietario} bloqueId={bloqueId}
+                                onSeleccionar={seleccionarBloque} onEditar={(b) => setEditor({ bloque: b })}
+                                onEliminar={eliminarBloque} onValorar={valorar} />
                         </div>
                     </div>
                 )}
@@ -429,6 +416,11 @@ export default function RocodromoPagina({ rocodromoId, onVolver }) {
                         setBloqueId(guardado.id);
                         setEditor(null);
                     }} />
+            )}
+            {valorando && (
+                <ValorarBloqueModal bloque={valorando} valoracion={valorando.valoraciones?.[usuario.uid]} yaHecho={hecho(valorando)}
+                    onGuardar={(v) => guardarAscenso(valorando, v)} onQuitar={() => guardarAscenso(valorando, null)}
+                    onClose={() => setValorando(null)} />
             )}
             {editandoDatos && (
                 <RocodromoModal rocodromoEditar={rocodromo} onClose={() => setEditandoDatos(false)} onEditado={setRocodromo} />

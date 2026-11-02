@@ -34,7 +34,10 @@ export default function CroquisImagen({ foto, onClickVia }) {
 
     const xRatio = natural && foto.srcW ? natural.w / foto.srcW : 1;
     const yRatio = natural && foto.srcH ? natural.h / foto.srcH : 1;
-    const f = natural && anchoVisible ? natural.w / anchoVisible : 1;
+    // fPantalla: píxeles de la foto por píxel de pantalla. Líneas y números se reducen algo
+    // en fotos pequeñas (móvil) para no tapar la pared.
+    const fPantalla = natural && anchoVisible ? natural.w / anchoVisible : 1;
+    const f = fPantalla * (anchoVisible ? Math.min(1, Math.max(0.6, anchoVisible / 600)) : 1);
 
     const dibujarLinea = (via, marca, discontinua, onClick) => {
         const dir = via.inicio && via.fin ? via.fin.y - via.inicio.y : -1;
@@ -50,7 +53,7 @@ export default function CroquisImagen({ foto, onClickVia }) {
                 <path d={d} fill="none" stroke="black" strokeWidth={grosor + 2 * f} opacity="0.4" strokeDasharray={guiones} />
                 <path d={d} fill="none" stroke={via.color} strokeWidth={grosor} strokeLinecap="round" strokeDasharray={guiones} />
                 {(via.textos || []).map((txt, i) => (
-                    <TextoSvg key={i} txt={{ ...txt, x: txt.x * xRatio, y: txt.y * yRatio }} color={via.color} f={f} />
+                    <TextoSvg key={i} txt={{ ...txt, x: txt.x * xRatio, y: txt.y * yRatio }} color={via.color} fPantalla={fPantalla} escala={xRatio} />
                 ))}
                 {via.inicio && (
                     <>
@@ -73,7 +76,7 @@ export default function CroquisImagen({ foto, onClickVia }) {
                         <g key={s.id}>
                             {s.tipo === 'RECT' && <rect x={s.x * xRatio} y={s.y * yRatio} width={s.w * xRatio} height={s.h * yRatio} fill="none" stroke={s.color} strokeWidth={s.grosor * f} />}
                             {s.tipo === 'ELIPSE' && <ellipse cx={(s.x + s.w / 2) * xRatio} cy={(s.y + s.h / 2) * yRatio} rx={s.w / 2 * xRatio} ry={s.h / 2 * yRatio} fill="none" stroke={s.color} strokeWidth={s.grosor * f} />}
-                            {s.tipo === 'TEXTO_LIBRE' && <text x={s.x * xRatio} y={s.y * yRatio} fill={s.color} stroke="white" strokeWidth={2 * f} paintOrder="stroke" fontSize={(s.fontSize || 20) * 0.8 * f} fontWeight="bold">{s.text}</text>}
+                            {s.tipo === 'TEXTO_LIBRE' && <text x={s.x * xRatio} y={s.y * yRatio} fill={s.color} stroke="white" strokeWidth={2 * f} paintOrder="stroke" fontSize={Math.max((s.fontSize || 20) * xRatio, 8 * fPantalla)} fontWeight="bold">{s.text}</text>}
                         </g>
                     ))}
                     {(foto.vias || []).map((v, i) => dibujarLinea(v, i + 1, false, () => onClickVia?.({ ...v, num: i + 1 })))}
@@ -87,10 +90,13 @@ export default function CroquisImagen({ foto, onClickVia }) {
     );
 }
 
-const TextoSvg = ({ txt, color, f }) => {
+// Los textos guardan su tamaño respecto a la foto, como en el editor; solo se agrandan
+// lo justo para que no bajen de 8 px en pantalla.
+const TextoSvg = ({ txt, color, fPantalla, escala }) => {
     const isGrado = txt.type === 'grado';
-    const fs = (txt.fontSize || (isGrado ? 14 : 18)) * 0.8 * f;
-    const hw = fs + 6 * f, hh = Math.ceil(fs * 0.9);
+    const fs = Math.max((txt.fontSize || (isGrado ? 14 : 18)) * escala, 8 * fPantalla);
+    const f = fs / 14;
+    const hw = fs * 1.1, hh = fs * 0.85;
     return (
         <g transform={`translate(${txt.x}, ${txt.y}) rotate(${txt.rotation || 0})`}>
             {isGrado

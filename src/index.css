@@ -19,7 +19,22 @@ nav input::placeholder { color: rgba(255,255,255,0.45); }
 /* Rocódromo: foto y lista de bloques */
 .roc-layout { display: grid; grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr); gap: 16px; max-width: 1280px; margin: 0 auto; align-items: start; }
 
+/* Revisión de propuestas: trazado actual y propuesto lado a lado */
+.propuesta-trazados { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 12px; }
+
 @media (max-width: 760px) {
+    /* Inicio: cabecera compacta, pestañas en una fila deslizable */
+    .home-nav-acciones { width: 100%; gap: 8px !important; }
+    .home-nav-acciones > button { padding: 8px 10px !important; font-size: 0.82rem !important; }
+    .ocultar-movil { display: none !important; }
+    .home-tabs { flex-wrap: nowrap !important; overflow-x: auto; margin-inline: -20px; padding: 2px 20px 4px; scrollbar-width: none; }
+    .home-tabs > * { flex-shrink: 0; }
+    /* Notificaciones: hoja inferior a lo ancho de la pantalla, sin tapar la campana */
+    .panel-notificaciones { position: fixed !important; top: auto !important; bottom: 10px !important; left: 10px !important; right: 10px !important; width: auto !important; max-width: none !important; }
+    /* Inicio: toda la página se desplaza, mapa incluido */
+    .home-app { height: auto !important; min-height: 100dvh; }
+    .home-lista { flex: none !important; overflow: visible !important; }
+    .propuesta-trazados { grid-template-columns: 1fr; }
     .roc-layout { grid-template-columns: minmax(0, 1fr); }
     .ep-bloque { grid-column: span 12; }
     .ep-croquis { flex-direction: column !important; }
