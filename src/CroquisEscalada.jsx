@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useEffect, useCallback, useId } from 'react';
 import {
     Camera, Link as LinkIcon, Plus, MapPin,
     Type, Edit, Info, CheckCircle, Move, ZoomIn, ZoomOut,
@@ -15,6 +15,7 @@ import { ItinerarioEditor } from './components/ItinerarioMapa';
 import CompartirViaModal from './components/CompartirViaModal';
 import EquipadorInput from './components/EquipadorInput';
 import { resolverEquipadores } from './utils/equipadores';
+import { usePinchZoom } from './utils/pinchZoom';
 import SelectorRegion from './components/SelectorRegion';
 import { EditorReferencias, limpiarReferencias } from './components/Referencias';
 import { normalizarNombre, notificarAsociacion } from './utils/escuelas';
@@ -187,6 +188,7 @@ export default function CroquisEscalada({ onExit, croquisInicial, registrarSalid
     const [confirmarSalida, setConfirmarSalida] = useState(false);
     const hayCambiosRef = useRef(() => false);
     const pulsacion = useRef(null);
+    const toquePendiente = useRef(null); // en pantallas táctiles el punto se coloca al levantar el dedo
 
     // En móvil la lista de vías y las anotaciones se pliegan para dejar la foto libre
     const [esMovil, setEsMovil] = useState(() => window.matchMedia(MEDIA_MOVIL).matches);
@@ -634,10 +636,23 @@ export default function CroquisEscalada({ onExit, croquisInicial, registrarSalid
         };
     };
 
+    const pellizco = usePinchZoom({ contenedorRef, scale, setScale, pan, setPan });
+
     const handlePointerDown = (e) => {
+        // Segundo dedo: empieza el zoom y se anula lo que hubiera empezado el primero
+        if (pellizco.onDown(e)) {
+            setIsDragging(false);
+            setDibujando(null);
+            dibujandoStart.current = null;
+            toquePendiente.current = null;
+            pulsacion.current = null;
+            return;
+        }
         // Con la lista abierta sobre la foto, el primer toque solo la cierra
         if (esMovil && panelAbierto) { setPanelAbierto(false); pulsacion.current = null; return; }
         pulsacion.current = { x: e.clientX, y: e.clientY };
+        // Tocar fuera de los puntos quita el asa de movimiento
+        window.dispatchEvent(new CustomEvent('punto-activado', { detail: null }));
 
         // Herramientas de forma (shapes)
         if (herramientaForma === 'TEXTO_LIBRE') {
@@ -654,6 +669,10 @@ export default function CroquisEscalada({ onExit, croquisInicial, registrarSalid
         }
 
         if (herramienta !== 'PAN' && (creando || esCreandoCombinacion || editandoViaIdx !== null || editandoCombinacionIdx !== null)) {
+            if (e.pointerType === 'touch') {
+                toquePendiente.current = { x: e.clientX, y: e.clientY };
+                return;
+            }
             const { x, y } = screenToSvg(e.clientX, e.clientY);
             aplicarHerramienta(x, y);
         } else {
@@ -667,6 +686,7 @@ export default function CroquisEscalada({ onExit, croquisInicial, registrarSalid
         && Math.hypot(e.clientX - pulsacion.current.x, e.clientY - pulsacion.current.y) < 8;
 
     const handlePointerMove = (e) => {
+        if (pellizco.onMove(e)) return;
         if (dibujando && dibujandoStart.current) {
             const { x, y } = screenToSvg(e.clientX, e.clientY);
             const sx = dibujandoStart.current.x;
@@ -677,7 +697,14 @@ export default function CroquisEscalada({ onExit, croquisInicial, registrarSalid
         if (isDragging) setPan({ x: e.clientX - dragStart.x, y: e.clientY - dragStart.y });
     };
 
-    const handlePointerUp = () => {
+    const handlePointerUp = (e) => {
+        if (pellizco.onUp(e)) { setIsDragging(false); return; }
+        const toque = toquePendiente.current;
+        toquePendiente.current = null;
+        if (toque && e && Math.hypot(e.clientX - toque.x, e.clientY - toque.y) < 10) {
+            const { x, y } = screenToSvg(toque.x, toque.y);
+            aplicarHerramienta(x, y);
+        }
         if (dibujando && dibujandoStart.current && (dibujando.w > 4 || dibujando.h > 4)) {
             setFormas(prev => [...prev, {
                 id: Date.now(), tipo: herramientaForma,
@@ -694,13 +721,13 @@ export default function CroquisEscalada({ onExit, croquisInicial, registrarSalid
     const puedeAbrirTrazado = !creando && !esCreandoCombinacion && !herramientaForma && herramienta === 'PAN';
 
     const abrirVia = (idx) => {
-        if (!puedeAbrirTrazado || editandoViaIdx === idx) return;
+        if (!puedeAbrirTrazado || editandoViaIdx !== null || editandoCombinacionIdx !== null) return;
         setEditandoCombinacionIdx(null);
         setEditandoViaIdx(idx);
     };
 
     const abrirCombinacion = (idx) => {
-        if (!puedeAbrirTrazado || editandoCombinacionIdx === idx) return;
+        if (!puedeAbrirTrazado || editandoViaIdx !== null || editandoCombinacionIdx !== null) return;
         setEditandoViaIdx(null);
         setEditandoCombinacionIdx(idx);
     };
@@ -1174,6 +1201,7 @@ export default function CroquisEscalada({ onExit, croquisInicial, registrarSalid
                 onPointerMove={handlePointerMove}
                 onPointerUp={handlePointerUp}
                 onPointerLeave={handlePointerUp}
+                onPointerCancel={handlePointerUp}
                 style={{
                     flex: 1, overflow: 'hidden', background: '#ecf0f1', position: 'relative',
                     cursor: (editandoViaIdx !== null || (creando && herramienta === 'PAN'))
@@ -1208,7 +1236,8 @@ export default function CroquisEscalada({ onExit, croquisInicial, registrarSalid
 
                     <svg
                         width={imgSize.w} height={imgSize.h}
-                        style={{ position: 'absolute', top: 0, left: 0, pointerEvents: (editandoViaIdx !== null || creando || herramientaForma) ? 'all' : 'none' }}
+                        // overflow visible: el asa de un punto cercano al borde queda fuera de la foto y debe poder tocarse
+                        style={{ position: 'absolute', top: 0, left: 0, overflow: 'visible', pointerEvents: (editandoViaIdx !== null || creando || herramientaForma) ? 'all' : 'none' }}
                     >
                         {vias.map((via, idx) => {
                             const dir = via.inicio && via.fin ? via.fin.y - via.inicio.y : -1;
@@ -1224,7 +1253,7 @@ export default function CroquisEscalada({ onExit, croquisInicial, registrarSalid
                                 <g key={via.id} onClick={e => { if (fueToque(e)) abrirVia(idx); }}>
                                     {/* Zona ancha e invisible para poder tocar la línea con el dedo */}
                                     <path d={generarCurvaSuave(pts)} fill="none" stroke="transparent" strokeWidth={24 / scale}
-                                        style={{ pointerEvents: puedeAbrirTrazado ? 'stroke' : 'none', cursor: 'pointer' }} />
+                                        style={{ pointerEvents: puedeAbrirTrazado && editandoViaIdx === null && editandoCombinacionIdx === null ? 'stroke' : 'none', cursor: 'pointer' }} />
                                     <path d={generarCurvaSuave(pts)} fill="none" stroke="black" strokeWidth={(via.grosor || 4) + 2} opacity="0.4" />
                                     <path d={generarCurvaSuave(pts)} fill="none" stroke={via.color} strokeWidth={via.grosor || 4} strokeLinecap="round" strokeLinejoin="round" />
                                     {via.textos.map((txt, tIdx) => {
@@ -1308,7 +1337,7 @@ export default function CroquisEscalada({ onExit, croquisInicial, registrarSalid
                                 <g key={combi.id} onClick={e => { if (fueToque(e)) abrirCombinacion(idx); }}>
                                     {/* Zona ancha e invisible para poder tocar la línea con el dedo */}
                                     <path d={generarCurvaSuave(pts)} fill="none" stroke="transparent" strokeWidth={24 / scale}
-                                        style={{ pointerEvents: puedeAbrirTrazado ? 'stroke' : 'none', cursor: 'pointer' }} />
+                                        style={{ pointerEvents: puedeAbrirTrazado && editandoViaIdx === null && editandoCombinacionIdx === null ? 'stroke' : 'none', cursor: 'pointer' }} />
                                     <path d={generarCurvaSuave(pts)} fill="none" stroke="black" strokeWidth={(combi.grosor || 4) + 2} opacity="0.4" strokeDasharray="10,6" />
                                     <path d={generarCurvaSuave(pts)} fill="none" stroke={combi.color} strokeWidth={combi.grosor || 4} strokeLinecap="round" strokeLinejoin="round" strokeDasharray="10,6" />
                                     {combi.textos.map((txt, tIdx) => {
@@ -2031,41 +2060,66 @@ export default function CroquisEscalada({ onExit, croquisInicial, registrarSalid
 }
 
 // ─── COMPONENTE: Punto editable con drag ───
-function PuntoEditable({ x, y, color, onMove, onDelete, contenedorRef, pan, scale }) {
-    const [dragging, setDragging] = useState(false);
+// Distancia en pantalla entre un punto y su asa, para que el dedo no tape el punto
+const DISTANCIA_ASA = 70;
 
-    const handlePointerDown = (e) => {
+// Punto arrastrable. Al tocarlo aparece un asa debajo: al arrastrarla el punto se mueve
+// manteniendo la distancia, así se ve exactamente dónde queda.
+function PuntoEditable({ x, y, color, onMove, onDelete, contenedorRef, pan, scale }) {
+    const id = useId();
+    const [activo, setActivo] = useState(false);
+    const [arrastre, setArrastre] = useState(null); // 'punto' | 'asa'
+    const separacion = DISTANCIA_ASA / scale;
+
+    useEffect(() => {
+        const alActivar = (e) => setActivo(e.detail === id);
+        window.addEventListener('punto-activado', alActivar);
+        return () => window.removeEventListener('punto-activado', alActivar);
+    }, [id]);
+
+    const posicion = (e) => {
+        const rect = contenedorRef.current.getBoundingClientRect();
+        return { x: (e.clientX - rect.left - pan.x) / scale, y: (e.clientY - rect.top - pan.y) / scale };
+    };
+
+    const empezar = (modo) => (e) => {
         e.stopPropagation();
         e.currentTarget.setPointerCapture(e.pointerId);
-        setDragging(true);
+        setArrastre(modo);
+        if (modo === 'punto') window.dispatchEvent(new CustomEvent('punto-activado', { detail: id }));
     };
 
-    const handlePointerMove = (e) => {
-        if (!dragging) return;
+    const mover = (e) => {
+        if (!arrastre) return;
         e.stopPropagation();
-        const rect = contenedorRef.current.getBoundingClientRect();
-        onMove(
-            (e.clientX - rect.left - pan.x) / scale,
-            (e.clientY - rect.top - pan.y) / scale
-        );
+        const p = posicion(e);
+        onMove(p.x, arrastre === 'asa' ? p.y - separacion : p.y);
     };
 
-    const handlePointerUp = (e) => {
+    const soltar = (e) => {
         e.stopPropagation();
-        setDragging(false);
+        setArrastre(null);
     };
 
     return (
         <g>
-            <circle cx={x} cy={y} r={dragging ? 14 : 10}
-                fill={color} fillOpacity={0.85} stroke="white" strokeWidth="2"
-                style={{ cursor: 'grab' }}
-                onPointerDown={handlePointerDown}
-                onPointerMove={handlePointerMove}
-                onPointerUp={handlePointerUp} />
-            <g onClick={(e) => { e.stopPropagation(); onDelete(); }} style={{ cursor: 'pointer' }}>
-                <circle cx={x + 12} cy={y - 12} r={8} fill="#e74c3c" />
-                <text x={x + 12} y={y - 8} textAnchor="middle" fill="white" fontSize="12" fontWeight="bold">×</text>
+            {activo && (
+                <g>
+                    <line x1={x} y1={y} x2={x} y2={y + separacion} stroke="white" strokeWidth={2 / scale} strokeDasharray={`${4 / scale},${3 / scale}`} pointerEvents="none" />
+                    <circle cx={x} cy={y} r={3 / scale} fill="white" pointerEvents="none" />
+                    <circle data-asa="" cx={x} cy={y + separacion} r={(arrastre === 'asa' ? 22 : 18) / scale}
+                        fill={color} fillOpacity={0.35} stroke="white" strokeWidth={2.5 / scale}
+                        style={{ cursor: 'move', touchAction: 'none' }}
+                        onPointerDown={empezar('asa')} onPointerMove={mover} onPointerUp={soltar} onPointerCancel={soltar} />
+                </g>
+            )}
+            <circle data-punto="" cx={x} cy={y} r={(arrastre === 'punto' ? 14 : 10) / scale}
+                fill={color} fillOpacity={activo ? 0.5 : 0.85} stroke="white" strokeWidth={2 / scale}
+                style={{ cursor: 'grab', touchAction: 'none' }}
+                onPointerDown={empezar('punto')} onPointerMove={mover} onPointerUp={soltar} onPointerCancel={soltar} />
+            <g data-borrar="" onPointerDown={e => e.stopPropagation()} onClick={(e) => { e.stopPropagation(); onDelete(); }} style={{ cursor: 'pointer' }}>
+                <circle cx={x + 20 / scale} cy={y - 20 / scale} r={9 / scale} fill="#e74c3c" stroke="white" strokeWidth={1.5 / scale} />
+                <text x={x + 20 / scale} y={y - 16 / scale} textAnchor="middle" fill="white" fontSize={12 / scale} fontWeight="bold" pointerEvents="none">×</text>
             </g>
         </g>
     );

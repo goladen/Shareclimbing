@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { X, Download, Printer, Move } from 'lucide-react';
+import { X, Download, Printer, Move, List } from 'lucide-react';
+import { ControlesListaVias, agruparVias, useConfigListaVias } from './ConfigListaVias';
 
 // ─── Helpers de canvas ───────────────────────────────────────────────────────
 
@@ -208,7 +209,7 @@ function dibujarFormas(ctx, formas, xR, yR) {
 }
 
 // Dibuja la tabla directamente en el canvas (para descarga PNG)
-function dibujarTablaEnCanvas(ctx, viasOrdenadas, numeroInicial, posX, posY, maxW) {
+function dibujarTablaEnCanvas(ctx, grupo, numeroInicial, posX, posY, maxW) {
     const rowH = 30, headerH = 34, pad = 10;
     const col1W = 48, col3W = 70;
     const col2W = Math.max(100, Math.min(200, maxW - col1W - col3W - 20));
@@ -218,7 +219,7 @@ function dibujarTablaEnCanvas(ctx, viasOrdenadas, numeroInicial, posX, posY, max
     ctx.shadowColor = 'rgba(0,0,0,0.35)';
     ctx.shadowBlur = 12;
     ctx.fillStyle = 'white';
-    ctx.fillRect(posX, posY, tableW, headerH + rowH * viasOrdenadas.length);
+    ctx.fillRect(posX, posY, tableW, headerH + rowH * grupo.length);
     ctx.shadowBlur = 0;
 
     // Cabecera
@@ -234,7 +235,7 @@ function dibujarTablaEnCanvas(ctx, viasOrdenadas, numeroInicial, posX, posY, max
     ctx.fillText('Grado', posX + col1W + col2W + pad, cy);
 
     // Filas
-    viasOrdenadas.forEach((v, i) => {
+    grupo.forEach(({ via: v, indice }, i) => {
         const rowY = posY + headerH + i * rowH;
         ctx.fillStyle = i % 2 === 0 ? 'white' : '#f8f9fa';
         ctx.fillRect(posX, rowY, tableW, rowH);
@@ -248,7 +249,7 @@ function dibujarTablaEnCanvas(ctx, viasOrdenadas, numeroInicial, posX, posY, max
         ctx.fillStyle = 'white';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        ctx.fillText(numVia(v, i, numeroInicial), posX + 24, rowY + rowH / 2);
+        ctx.fillText(numVia(v, indice, numeroInicial), posX + 24, rowY + rowH / 2);
 
         // Nombre
         ctx.font = '13px sans-serif';
@@ -261,6 +262,7 @@ function dibujarTablaEnCanvas(ctx, viasOrdenadas, numeroInicial, posX, posY, max
         ctx.fillStyle = '#e74c3c';
         ctx.fillText(v.info?.grado || '–', posX + col1W + col2W + pad, rowY + rowH / 2);
     });
+    return tableW;
 }
 
 // ─── Componente principal ────────────────────────────────────────────────────
@@ -277,6 +279,7 @@ export default function ModalImpresion({ croquis, onClose }) {
     const [tablaPos, setTablaPos] = useState({ x: 2, y: 65 });
     const [dragging, setDragging] = useState(false);
     const dragOffset = useRef({ x: 0, y: 0 });
+    const [listaVias, setListaVias] = useConfigListaVias('impresion');
 
     const vias = croquis.vias || [];
     const formas = croquis.formas || [];
@@ -285,6 +288,7 @@ export default function ModalImpresion({ croquis, onClose }) {
 
     // Vías ordenadas de izquierda a derecha por la posición de inicio
     const viasOrdenadas = [...vias].sort((a, b) => (a.inicio?.x ?? Infinity) - (b.inicio?.x ?? Infinity));
+    const grupos = agruparVias(viasOrdenadas, listaVias);
 
     // Dibuja imagen + vías + formas + combinaciones en el canvas (sin tabla)
     const renderCanvas = (img) => {
@@ -356,9 +360,14 @@ export default function ModalImpresion({ croquis, onClose }) {
         tmp.height = src.height;
         const ctx = tmp.getContext('2d');
         ctx.drawImage(src, 0, 0);
-        const posX = (tablaPos.x / 100) * src.width;
-        const posY = (tablaPos.y / 100) * src.height;
-        dibujarTablaEnCanvas(ctx, viasOrdenadas, numeroInicial, posX, posY, src.width - posX - 20);
+        if (!listaVias.oculta && viasOrdenadas.length > 0) {
+            const posX = (tablaPos.x / 100) * src.width;
+            const posY = (tablaPos.y / 100) * src.height;
+            const separacion = 12;
+            const anchoGrupo = (src.width - posX - 20) / grupos.length - separacion;
+            let x = posX;
+            grupos.forEach(grupo => { x += dibujarTablaEnCanvas(ctx, grupo, numeroInicial, x, posY, anchoGrupo) + separacion; });
+        }
         const a = document.createElement('a');
         a.href = tmp.toDataURL('image/png');
         a.download = `${info.sector || info.escuela || 'croquis'}.png`;
@@ -371,7 +380,7 @@ export default function ModalImpresion({ croquis, onClose }) {
         const dataUrl = canvas.toDataURL('image/png');
         const titulo = [info.escuela, info.sector].filter(Boolean).join(' · ') || 'Croquis';
 
-        const filasHtml = viasOrdenadas.map((v, i) => `
+        const filasDe = (grupo) => grupo.map(({ via: v, indice: i }) => `
             <tr style="background:${i % 2 === 0 ? 'white' : '#f8f9fa'}">
                 <td style="padding:5px 12px">
                     <span style="background:${v.color};color:white;border-radius:50%;width:22px;height:22px;display:inline-flex;align-items:center;justify-content:center;font-weight:bold;font-size:11px;flex-shrink:0">${numVia(v, i, numeroInicial)}</span>
@@ -379,6 +388,11 @@ export default function ModalImpresion({ croquis, onClose }) {
                 <td style="padding:5px 12px;color:#2c3e50">${v.info?.nombre || '–'}</td>
                 <td style="padding:5px 12px;color:#e74c3c;font-weight:bold">${v.info?.grado || '–'}</td>
             </tr>`).join('');
+        const tablasViasHtml = viasOrdenadas.length === 0 ? '' : `<div style="display:flex;gap:8px;align-items:flex-start">${grupos.map(g => `
+            <table>
+              <thead><tr><th>Nº</th><th>Nombre</th><th>Grado</th></tr></thead>
+              <tbody>${filasDe(g)}</tbody>
+            </table>`).join('')}</div>`;
 
         const filasCombinaciones = combinaciones.map((c, i) => {
             const letra = String.fromCharCode(65 + i);
@@ -413,13 +427,10 @@ export default function ModalImpresion({ croquis, onClose }) {
 </head><body>
 <div class="wrap">
   <img src="${dataUrl}" />
-  <div class="tabla">
-    <table>
-      <thead><tr><th>Nº</th><th>Nombre</th><th>Grado</th></tr></thead>
-      <tbody>${filasHtml}</tbody>
-    </table>
+  ${listaVias.oculta ? '' : `<div class="tabla">
+    ${tablasViasHtml}
     ${tablaCombinacionesHtml}
-  </div>
+  </div>`}
 </div>
 <script>window.onload=function(){window.print();}<\/script>
 </body></html>`);
@@ -462,7 +473,14 @@ export default function ModalImpresion({ croquis, onClose }) {
                 {/* Instrucción */}
                 {listo && (
                     <div style={{ background: '#eaf4fb', borderBottom: '1px solid #d0e8f5', padding: '7px 20px', display: 'flex', alignItems: 'center', gap: 8, fontSize: '0.82rem', color: '#2471a3' }}>
-                        <Move size={14} /> Arrastra la tabla de vías para posicionarla antes de imprimir o descargar.
+                        {listaVias.oculta ? (
+                            <>
+                                La tabla de vías está oculta y no se imprimirá.
+                                <button onClick={() => setListaVias({ oculta: false })} style={st.btnMostrar}><List size={14} /> Mostrar tabla de vías</button>
+                            </>
+                        ) : (
+                            <><Move size={14} /> Arrastra la tabla de vías para posicionarla antes de imprimir o descargar.</>
+                        )}
                     </div>
                 )}
 
@@ -481,7 +499,7 @@ export default function ModalImpresion({ croquis, onClose }) {
                         />
 
                         {/* Tabla HTML arrastrable */}
-                        {listo && (viasOrdenadas.length > 0 || combinaciones.length > 0) && (
+                        {listo && !listaVias.oculta && (viasOrdenadas.length > 0 || combinaciones.length > 0) && (
                             <div
                                 style={{
                                     position: 'absolute',
@@ -497,8 +515,14 @@ export default function ModalImpresion({ croquis, onClose }) {
                                 onPointerUp={handleTablePointerUp}
                                 onPointerLeave={handleTablePointerUp}
                             >
+                                {/* Opciones encima de la tabla; no se imprimen */}
+                                <div style={{ position: 'absolute', bottom: '100%', left: 0, lineHeight: 1.2 }}>
+                                    <ControlesListaVias config={listaVias} onChange={setListaVias} />
+                                </div>
                                 {viasOrdenadas.length > 0 && (
-                                    <table style={{ borderCollapse: 'collapse', fontFamily: 'sans-serif', fontSize: '12px', background: 'white', boxShadow: '0 4px 14px rgba(0,0,0,0.45)', whiteSpace: 'nowrap', borderRadius: 4, overflow: 'hidden' }}>
+                                    <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+                                    {grupos.map((grupo, g) => (
+                                    <table key={g} style={{ borderCollapse: 'collapse', fontFamily: 'sans-serif', fontSize: '12px', background: 'white', boxShadow: '0 4px 14px rgba(0,0,0,0.45)', whiteSpace: 'nowrap', borderRadius: 4, overflow: 'hidden' }}>
                                         <thead>
                                             <tr style={{ background: '#2c3e50', color: 'white' }}>
                                                 <th style={{ padding: '6px 10px', textAlign: 'left', fontWeight: 'bold' }}>Nº</th>
@@ -507,7 +531,7 @@ export default function ModalImpresion({ croquis, onClose }) {
                                             </tr>
                                         </thead>
                                         <tbody>
-                                            {viasOrdenadas.map((v, i) => (
+                                            {grupo.map(({ via: v, indice: i }) => (
                                                 <tr key={v.id || i} style={{ background: i % 2 === 0 ? 'white' : '#f4f6f8' }}>
                                                     <td style={{ padding: '4px 10px' }}>
                                                         <span style={{ background: v.color, color: 'white', borderRadius: '50%', width: 20, height: 20, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontWeight: 'bold', fontSize: '10px' }}>
@@ -520,6 +544,8 @@ export default function ModalImpresion({ croquis, onClose }) {
                                             ))}
                                         </tbody>
                                     </table>
+                                    ))}
+                                    </div>
                                 )}
                                 {combinaciones.length > 0 && (
                                     <table style={{ borderCollapse: 'collapse', fontFamily: 'sans-serif', fontSize: '12px', background: 'white', boxShadow: '0 4px 14px rgba(0,0,0,0.45)', whiteSpace: 'nowrap', borderRadius: 4, overflow: 'hidden', marginTop: viasOrdenadas.length > 0 ? 6 : 0 }}>
@@ -562,6 +588,7 @@ const st = {
     modal: { background: 'white', width: '100%', maxWidth: 960, borderRadius: 14, display: 'flex', flexDirection: 'column', overflow: 'hidden', maxHeight: '95vh' },
     header: { background: '#2c3e50', padding: '12px 20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0, flexWrap: 'wrap', gap: 10 },
     body: { flex: 1, overflowY: 'auto', padding: 20, background: '#f4f6f8', textAlign: 'center' },
+    btnMostrar: { display: 'inline-flex', alignItems: 'center', gap: 5, marginLeft: 8, padding: '4px 10px', background: 'white', color: '#2471a3', border: '1px solid #2471a3', borderRadius: 7, fontWeight: 'bold', cursor: 'pointer', fontSize: '0.8rem' },
     btnClose: { background: 'none', border: 'none', color: 'rgba(255,255,255,0.8)', cursor: 'pointer' },
     btnAccion: { display: 'flex', alignItems: 'center', gap: 6, padding: '7px 14px', background: '#27ae60', color: 'white', border: 'none', borderRadius: 8, fontWeight: 'bold', cursor: 'pointer', fontSize: '0.85rem' },
 };

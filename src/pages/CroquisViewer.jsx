@@ -1,17 +1,19 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { ArrowLeft, ZoomIn, ZoomOut, Edit, Info, X, Sun, Calendar, MapPin, AlertTriangle, MessageCircle, Trash2, UserPlus, Users, CheckCircle, XCircle, Shield, Mail, Share2, Printer, Mountain } from 'lucide-react';
+import { ArrowLeft, ZoomIn, ZoomOut, Edit, Info, X, Sun, Calendar, MapPin, AlertTriangle, MessageCircle, Trash2, UserPlus, Users, CheckCircle, XCircle, Shield, Mail, Share2, Printer, Mountain, List } from 'lucide-react';
 import ModalImpresion from '../components/ModalImpresion';
 import { db } from '../firebase';
 import { deleteDoc, doc, addDoc, updateDoc, collection, query, where, getDocs, serverTimestamp, arrayUnion, arrayRemove } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
 import ComentariosCroquis from '../components/ComentariosCroquis';
 import { useAccesoDirecto } from '../utils/accesoDirecto';
+import { usePinchZoom } from '../utils/pinchZoom';
 import { ItinerarioVista } from '../components/ItinerarioMapa';
 import { AsociarEscuelaModal } from '../components/AsociacionEscuela';
 import CompartirViaModal from '../components/CompartirViaModal';
 import { EquipadorYColaboradores } from '../components/EquipadorInput';
 import { textoRegion } from '../utils/regiones';
 import { ListaReferencias } from '../components/Referencias';
+import { ControlesListaVias, agruparVias, useConfigListaVias } from '../components/ConfigListaVias';
 
 const generarCurvaSuave = (puntos) => {
     if (puntos.length === 0) return "";
@@ -62,6 +64,7 @@ export default function CroquisViewer({ croquis: croquisProp, onVolver, onEditar
     const [mostrarCombinaciones, setMostrarCombinaciones] = useState(false);
     const [mostrarAsociar, setMostrarAsociar] = useState(false);
     const [viaCompartiendo, setViaCompartiendo] = useState(null);
+    const [listaVias, setListaVias] = useConfigListaVias('visor');
 
     const contenedorRef = useRef(null);
 
@@ -127,14 +130,20 @@ export default function CroquisViewer({ croquis: croquisProp, onVolver, onEditar
         el.addEventListener('wheel', handleWheel, { passive: false });
         return () => el.removeEventListener('wheel', handleWheel);
     });
+    const pellizco = usePinchZoom({ contenedorRef, scale, setScale, pan, setPan });
     const handlePointerDown = (e) => {
+        if (pellizco.onDown(e)) { setIsDragging(false); return; }
         setIsDragging(true);
         setDragStart({ x: e.clientX - pan.x, y: e.clientY - pan.y });
     };
     const handlePointerMove = (e) => {
+        if (pellizco.onMove(e)) return;
         if (isDragging) setPan({ x: e.clientX - dragStart.x, y: e.clientY - dragStart.y });
     };
-    const handlePointerUp = () => setIsDragging(false);
+    const handlePointerUp = (e) => {
+        pellizco.onUp(e);
+        setIsDragging(false);
+    };
 
     // ── Compartir enlace ──
     const compartir = () => {
@@ -372,6 +381,7 @@ export default function CroquisViewer({ croquis: croquisProp, onVolver, onEditar
                 onPointerMove={handlePointerMove}
                 onPointerUp={handlePointerUp}
                 onPointerLeave={handlePointerUp}
+                onPointerCancel={handlePointerUp}
                 style={{ flex: 1, overflow: 'hidden', background: '#1e272e', position: 'relative', cursor: isDragging ? 'grabbing' : 'grab', touchAction: 'none' }}
             >
                 <div style={{
@@ -432,16 +442,29 @@ export default function CroquisViewer({ croquis: croquisProp, onVolver, onEditar
                 </div>
 
                 {/* Leyenda lateral */}
-                {(vias.length > 0 || (mostrarCombinaciones && combinaciones.length > 0)) && (
-                    <div style={st.leyenda}>
-                        {vias.map((v, i) => (
-                            <div key={v.id} onClick={() => setViaSeleccionada({ ...v, num: i + 1 })}
-                                style={{ ...st.leyendaItem, borderLeft: `4px solid ${v.color}` }}>
-                                <span style={{ fontWeight: 'bold', color: v.color }}>{i + 1}</span>
-                                <span style={st.leyendaNombre}>{v.info?.nombre}</span>
-                                {v.info?.grado && <span style={st.leyendaGrado}>{v.info.grado}</span>}
-                            </div>
-                        ))}
+                {(vias.length > 0 || (mostrarCombinaciones && combinaciones.length > 0)) && listaVias.oculta && (
+                    <button onPointerDown={e => e.stopPropagation()} onClick={() => setListaVias({ oculta: false })} style={st.btnMostrarLeyenda}>
+                        <List size={15} /> Vías
+                    </button>
+                )}
+                {(vias.length > 0 || (mostrarCombinaciones && combinaciones.length > 0)) && !listaVias.oculta && (
+                    <div onPointerDown={e => e.stopPropagation()}
+                        style={{ ...st.leyenda, ...(listaVias.modo === 'tablas' ? { maxWidth: 'calc(100% - 24px)' } : {}) }}>
+                        <ControlesListaVias config={listaVias} onChange={setListaVias} oscuro />
+                        <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start', overflowX: 'auto' }}>
+                            {agruparVias(vias, listaVias).map((grupo, g) => (
+                                <div key={g} style={{ minWidth: listaVias.modo === 'tablas' ? 150 : 0, flex: listaVias.modo === 'tablas' ? '0 0 auto' : 1 }}>
+                                    {grupo.map(({ via: v, indice: i }) => (
+                                        <div key={v.id} onClick={() => setViaSeleccionada({ ...v, num: i + 1 })}
+                                            style={{ ...st.leyendaItem, borderLeft: `4px solid ${v.color}` }}>
+                                            <span style={{ fontWeight: 'bold', color: v.color }}>{i + 1}</span>
+                                            <span style={st.leyendaNombre}>{v.info?.nombre}</span>
+                                            {v.info?.grado && <span style={st.leyendaGrado}>{v.info.grado}</span>}
+                                        </div>
+                                    ))}
+                                </div>
+                            ))}
+                        </div>
                         {mostrarCombinaciones && combinaciones.length > 0 && (
                             <>
                                 <div style={{ fontSize: '0.7rem', fontWeight: 'bold', color: '#8e44ad', padding: '4px 8px', borderTop: '1px solid rgba(142,68,173,0.3)', marginTop: 4 }}>Combinaciones</div>
@@ -728,6 +751,7 @@ const st = {
     topbar: { background: '#2c3e50', padding: '10px 20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', zIndex: 10, boxShadow: '0 4px 10px rgba(0,0,0,0.3)', flexWrap: 'wrap', gap: 8 },
     btnIcono: { background: 'rgba(255,255,255,0.1)', border: 'none', color: 'white', padding: '8px 12px', borderRadius: 8, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4 },
     badge: { position: 'absolute', top: 2, right: 2, background: '#e74c3c', color: 'white', borderRadius: '50%', width: 16, height: 16, fontSize: '0.65rem', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 'bold' },
+    btnMostrarLeyenda: { position: 'absolute', top: 12, right: 12, display: 'flex', alignItems: 'center', gap: 6, background: 'rgba(0,0,0,0.7)', color: 'white', border: 'none', borderRadius: 10, padding: '8px 12px', fontWeight: 'bold', cursor: 'pointer' },
     leyenda: { position: 'absolute', top: 12, right: 12, background: 'rgba(0,0,0,0.7)', borderRadius: 10, padding: 10, maxHeight: 'calc(100% - 24px)', overflowY: 'auto', minWidth: 150, maxWidth: 200 },
     leyendaItem: { display: 'flex', alignItems: 'center', gap: 8, padding: '5px 8px', cursor: 'pointer', borderRadius: 4, marginBottom: 3, background: 'rgba(255,255,255,0.05)' },
     leyendaNombre: { color: 'white', fontSize: '0.82rem', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
