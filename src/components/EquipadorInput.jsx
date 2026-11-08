@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { cargarEquipadores } from '../utils/equipadores';
+import { cargarEquipadores, coincideNombre, nombreEquipador, useEquipadores } from '../utils/equipadores';
 import { normalizarNombre } from '../utils/escuelas';
 
 // Campo de equipador con sugerencias de las fichas existentes.
@@ -10,13 +10,15 @@ export default function EquipadorInput({ nombre = '', onChange, inputStyle, plac
 
     useEffect(() => { cargarEquipadores().then(setEquipadores); }, []);
 
+    // Las fichas ocultas no se sugieren, pero un nombre exacto sigue enlazando con ellas para no duplicarlas
     const escribir = (texto) => {
-        const exacto = equipadores.find(e => normalizarNombre(e.nombre) === normalizarNombre(texto));
+        const exacto = equipadores.find(e => coincideNombre(e, texto));
         onChange(texto, exacto?.id || null);
     };
 
     const sugerencias = equipadores
-        .filter(e => normalizarNombre(e.nombre).includes(normalizarNombre(nombre)) && normalizarNombre(e.nombre) !== normalizarNombre(nombre))
+        .filter(e => !e.oculto)
+        .filter(e => normalizarNombre(nombreEquipador(e)).includes(normalizarNombre(nombre)) && !coincideNombre(e, nombre))
         .slice(0, 8);
 
     return (
@@ -27,8 +29,8 @@ export default function EquipadorInput({ nombre = '', onChange, inputStyle, plac
             {abierto && sugerencias.length > 0 && (
                 <div style={st.lista}>
                     {sugerencias.map(e => (
-                        <div key={e.id} onMouseDown={() => { onChange(e.nombre, e.id); setAbierto(false); }} style={st.opcion}>
-                            🔩 {e.nombre}
+                        <div key={e.id} onMouseDown={() => { onChange(nombreEquipador(e), e.id); setAbierto(false); }} style={st.opcion}>
+                            🔩 {nombreEquipador(e)}{e.usuarioUid ? ' ✔' : ''}
                         </div>
                     ))}
                 </div>
@@ -37,14 +39,18 @@ export default function EquipadorInput({ nombre = '', onChange, inputStyle, plac
     );
 }
 
-// Línea de equipador (enlazada a su ficha) y colaboradores, para los detalles de una vía
+// Línea de equipador (enlazada a su ficha) y colaboradores, para los detalles de una vía.
+// Se muestra el nombre que haya elegido el equipador; si ocultó su ficha, no se enlaza.
 export function EquipadorYColaboradores({ info, onVerEquipador }) {
+    const equipadores = useEquipadores();
+    const ficha = info?.equipadorId ? equipadores?.find(e => e.id === info.equipadorId) : null;
+    const nombre = (ficha && !ficha.oculto ? nombreEquipador(ficha) : '') || info?.equipador;
     return (
         <>
             <p><strong>Equipador:</strong>{' '}
-                {info?.equipadorId && onVerEquipador
-                    ? <button onClick={() => onVerEquipador(info.equipadorId)} style={st.enlace}>{info.equipador}</button>
-                    : info?.equipador || 'Desconocido'}
+                {info?.equipadorId && onVerEquipador && !ficha?.oculto
+                    ? <button onClick={() => onVerEquipador(info.equipadorId)} style={st.enlace}>{nombre}</button>
+                    : nombre || 'Desconocido'}
             </p>
             {info?.colaboradores?.length > 0 && <p><strong>Colaboradores:</strong> {info.colaboradores.join(', ')}</p>}
         </>

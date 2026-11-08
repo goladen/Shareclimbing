@@ -12,6 +12,7 @@ import RocodromoPagina from './pages/RocodromoPagina';
 import TarjetaViaPagina from './pages/TarjetaViaPagina';
 import EquipadorPagina from './pages/EquipadorPagina';
 import JuegoPikt from './pages/JuegoPikt';
+import GrabarItinerarioPagina from './pages/GrabarItinerarioPagina';
 
 const VISTAS_INICIO = ['croquis', 'escuelas', 'rocodromos', 'equipadores', 'juegos'];
 
@@ -19,6 +20,8 @@ function leerHash() {
     const hash = window.location.hash;
     const mi = hash.match(/^#\/([a-z]+)$/);
     if (mi && VISTAS_INICIO.includes(mi[1])) return { tipo: 'inicio', vista: mi[1] };
+    const mg = hash.match(/^#\/grabar(?:\/(.+))?$/);
+    if (mg) return { tipo: 'grabar', id: mg[1] || null };
     const mc = hash.match(/^#\/croquis\/(.+)$/);
     if (mc) return { tipo: 'croquis', id: mc[1] };
     const mj = hash.match(/^#\/juegos\/([a-z]+)$/);
@@ -45,6 +48,7 @@ async function resolverHash() {
         return { name: 'home' };
     }
     if (enlace.tipo === 'juego') return { name: 'juego', path: enlace.path };
+    if (enlace.tipo === 'grabar') return { name: 'grabar', id: enlace.id };
     if (enlace.tipo === 'inicio') return { name: 'home', vista: enlace.vista };
     if (enlace.tipo === 'equipador') return { name: 'equipador', id: enlace.id };
     if (enlace.tipo === 'via') return { name: 'tarjetaVia', token: enlace.token };
@@ -107,6 +111,11 @@ export default function App() {
         setPantalla({ name: 'escuela', id, sector });
     };
     const irAPerfil = () => setPantalla({ name: 'profile' });
+    // Itinerarios grabados con GPS: id = null → lista
+    const irAGrabar = (id = null) => {
+        window.history.pushState(null, '', `${window.location.pathname}#/grabar${id ? `/${id}` : ''}`);
+        setPantalla({ name: 'grabar', id });
+    };
 
     if (!pantalla) {
         return (
@@ -170,12 +179,17 @@ export default function App() {
                     onVerEquipador={irAEquipador}
                 />
             )}
+            {pantalla.name === 'grabar' && (
+                <GrabarItinerarioPagina itinerarioId={pantalla.id} onAbrir={irAGrabar} onVolver={() => irAHome()} />
+            )}
             {pantalla.name === 'profile' && (
                 <ProfilePage
+                    onGrabarItinerario={() => irAGrabar()}
                     onVolver={() => irAHome()}
                     onVerCroquis={irAViewer}
                     onEditarCroquis={irAEditor}
                     onCrearCroquis={(escuelaInicial) => irAEditor(typeof escuelaInicial === 'string' && escuelaInicial ? { escuelaInicial } : null)}
+                    onVerEquipador={irAEquipador}
                 />
             )}
         </AuthProvider>

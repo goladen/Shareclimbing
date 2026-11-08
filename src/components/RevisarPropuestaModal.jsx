@@ -1,30 +1,15 @@
 import React, { useState, useEffect } from 'react';
 import { X, Check } from 'lucide-react';
-import { doc, getDoc, runTransaction, serverTimestamp, updateDoc } from 'firebase/firestore';
+import { doc, getDoc, updateDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import CroquisImagen from './CroquisImagen';
-import { fotosDeCroquis, resolverEquipadores } from '../utils/equipadores';
+import { aplicarAVia, fotosDeCroquis, modificarVia, resolverEquipadores } from '../utils/equipadores';
 
 const CAMPOS = [
     ['nombre', 'Nombre'], ['grado', 'Grado'], ['numero', 'Número'],
     ['equipador', 'Equipador'], ['anio', 'Año'], ['info', 'Información'],
 ];
-
-const aplicarAVia = (via, cambios, autorNombre) => {
-    const colaboradores = via.info?.colaboradores || [];
-    const info = {
-        ...via.info,
-        ...cambios.info,
-        colaboradores: colaboradores.includes(autorNombre) ? colaboradores : [...colaboradores, autorNombre],
-    };
-    return {
-        ...via,
-        ...(cambios.trazado || {}),
-        info,
-        textos: (via.textos || []).map(t => t.type === 'grado' ? { ...t, text: info.grado } : t),
-    };
-};
 
 // Quien compartió la tarjeta revisa la propuesta. Al aceptarla se aplica con sus
 // permisos, como si hubiera hecho el cambio, y quien la envió queda como colaborador.
@@ -43,6 +28,10 @@ export default function RevisarPropuestaModal({ propuesta, onClose, onAplicada }
         }).catch(e => setContexto({ error: e.message }));
     }, [propuesta]);
 
+    // Quien propone desde su ficha de equipador ya figura como equipador, no como colaborador
+    const deEquipador = Boolean(propuesta.equipadorId);
+    const colaborador = deEquipador ? null : propuesta.autorNombre;
+
     const responder = async (aceptar) => {
         setProcesando(true);
         setError('');
@@ -50,23 +39,7 @@ export default function RevisarPropuestaModal({ propuesta, onClose, onAplicada }
             if (aceptar) {
                 const [cambiosInfo] = await resolverEquipadores([{ info: propuesta.cambios.info }], usuario.uid);
                 const cambios = { ...propuesta.cambios, info: cambiosInfo.info };
-                const ref = doc(db, 'croquis_escalada', propuesta.croquisId);
-                // Se relee el croquis para no pisar cambios hechos mientras tanto en otras vías
-                await runTransaction(db, async (tx) => {
-                    const snap = await tx.get(ref);
-                    if (!snap.exists()) throw new Error('El croquis ya no existe.');
-                    let encontrada = false;
-                    const fotos = fotosDeCroquis(snap.data()).map(f => ({
-                        ...f,
-                        vias: (f.vias || []).map(v => {
-                            if (v.id !== propuesta.viaId) return v;
-                            encontrada = true;
-                            return aplicarAVia(v, cambios, propuesta.autorNombre);
-                        }),
-                    }));
-                    if (!encontrada) throw new Error('La vía ya no existe en el croquis.');
-                    tx.update(ref, { fotos, vias: fotos[0]?.vias || [], updatedAt: serverTimestamp() });
-                });
+                await modificarVia(propuesta.croquisId, propuesta.viaId, v => aplicarAVia(v, cambios, colaborador));
             }
             await updateDoc(doc(db, 'propuestas_via', propuesta.id), { estado: aceptar ? 'aceptada' : 'rechazada' });
             onAplicada?.(aceptar);
@@ -84,7 +57,7 @@ export default function RevisarPropuestaModal({ propuesta, onClose, onAplicada }
         <div style={st.overlay} onMouseDown={e => e.stopPropagation()}>
             <div style={st.modal}>
                 <div style={st.header}>
-                    <h3 style={{ margin: 0, color: '#2c3e50', fontSize: '1.05rem' }}>Propuesta de {propuesta.autorNombre}</h3>
+                    <h3 style={{ margin: 0, color: '#2c3e50', fontSize: '1.05rem' }}>Propuesta de {propuesta.autorNombre}{deEquipador ? ' (equipador)' : ''}</h3>
                     <button onClick={onClose} style={st.btnClose}><X size={20} /></button>
                 </div>
                 <div style={st.cuerpo}>
@@ -117,7 +90,7 @@ export default function RevisarPropuestaModal({ propuesta, onClose, onAplicada }
                             </table>
                             {propuesta.cambios.trazado && contexto.foto.imagenUrl && (
                                 <div className="propuesta-trazados">
-                                    {[['Trazado actual', contexto.via], ['Trazado propuesto', aplicarAVia(contexto.via, propuesta.cambios, propuesta.autorNombre)]].map(([titulo, v]) => (
+                                    {[['Trazado actual', contexto.via], ['Trazado propuesto', aplicarAVia(contexto.via, propuesta.cambios, colaborador)]].map(([titulo, v]) => (
                                         <div key={titulo}>
                                             <div style={{ fontWeight: 'bold', fontSize: '0.82rem', color: '#34495e', marginBottom: 4 }}>{titulo}</div>
                                             <CroquisImagen foto={{ ...contexto.foto, vias: [v], combinaciones: [], formas: [] }} />
@@ -126,7 +99,9 @@ export default function RevisarPropuestaModal({ propuesta, onClose, onAplicada }
                                 </div>
                             )}
                             <p style={{ color: '#7f8c8d', fontSize: '0.8rem', margin: '12px 0 0' }}>
-                                Si la aceptas, {propuesta.autorNombre} quedará como colaborador de la vía.
+                                {deEquipador
+                                    ? `${propuesta.autorNombre} gestiona su ficha de equipador y propone estos datos para una vía que equipó.`
+                                    : `Si la aceptas, ${propuesta.autorNombre} quedará como colaborador de la vía.`}
                             </p>
                         </>
                     )}

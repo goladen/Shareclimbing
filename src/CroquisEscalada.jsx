@@ -4,7 +4,7 @@ import {
     Type, Edit, Info, CheckCircle, Move, ZoomIn, ZoomOut,
     X, ArrowLeft, Image as ImageIcon, MousePointer2, Save,
     Globe, Lock, Layers, Square, Circle, AlignLeft, Printer,
-    ChevronUp, ChevronDown, List
+    ChevronUp, ChevronDown, List, Copy, ImagePlus
 } from 'lucide-react';
 import ModalImpresion from './components/ModalImpresion';
 import { db, auth } from './firebase';
@@ -16,6 +16,7 @@ import CompartirViaModal from './components/CompartirViaModal';
 import EquipadorInput from './components/EquipadorInput';
 import { resolverEquipadores } from './utils/equipadores';
 import { usePinchZoom } from './utils/pinchZoom';
+import CambiarFotoModal, { reajustarFoto } from './components/CambiarFotoModal';
 import SelectorRegion from './components/SelectorRegion';
 import { EditorReferencias, limpiarReferencias } from './components/Referencias';
 import { normalizarNombre, notificarAsociacion } from './utils/escuelas';
@@ -196,6 +197,7 @@ export default function CroquisEscalada({ onExit, croquisInicial, registrarSalid
     const [mostrarAnotaciones, setMostrarAnotaciones] = useState(false);
     const [barrasOcultas, setBarrasOcultas] = useState(false);
     const [viaCompartiendo, setViaCompartiendo] = useState(null);
+    const [cambiandoFoto, setCambiandoFoto] = useState(false);
 
     useEffect(() => {
         const mq = window.matchMedia(MEDIA_MOVIL);
@@ -510,6 +512,33 @@ export default function CroquisEscalada({ onExit, croquisInicial, registrarSalid
         const nombre = window.prompt('Nombre de esta foto (vacío para usar el número):', foto.nombre || '');
         if (nombre === null) return;
         setFotos(fs => fs.map((f, i) => i === fotoIdx ? { ...f, nombre: nombre.trim() } : f));
+    };
+
+    // Copia de la foto actual con todas sus vías; las vías reciben identificadores nuevos
+    // para que los enlaces y propuestas de la original no afecten a la copia
+    const duplicarFoto = () => {
+        const sufijo = Date.now();
+        const copia = {
+            ...foto,
+            id: `f${sufijo}`,
+            nombre: `${foto.nombre || `Foto ${fotoIdx + 1}`} (copia)`,
+            vias: (foto.vias || []).map((v, i) => ({ ...v, id: sufijo + 1000 + i })),
+            combinaciones: (foto.combinaciones || []).map((c, i) => ({ ...c, id: sufijo + 2000 + i })),
+            formas: (foto.formas || []).map((x, i) => ({ ...x, id: sufijo + 3000 + i })),
+        };
+        setFotos(prev => [...prev.slice(0, fotoIdx + 1), copia, ...prev.slice(fotoIdx + 1)]);
+        cambiarFoto(fotoIdx + 1);
+    };
+
+    // Nueva foto colocada bajo las líneas actuales: las líneas pasan a sus coordenadas
+    const asignarFotoNueva = ({ src, file, esArchivo, w, h, transformacion }) => {
+        setFotos(fs => fs.map((f, i) => i !== fotoIdx ? f : {
+            ...reajustarFoto(f, transformacion),
+            imagenUrl: src, imagenFile: file, imagenEsArchivo: esArchivo, srcW: w, srcH: h,
+        }));
+        setImgSize({ w, h });
+        encuadrarImagen(w, h);
+        setCambiandoFoto(false);
     };
 
     const agregarFoto = () => {
@@ -979,6 +1008,16 @@ export default function CroquisEscalada({ onExit, croquisInicial, registrarSalid
                         </button>
                         <button onClick={() => cambiarFoto(fotoIdx + 1)} disabled={fotoIdx === fotos.length - 1}
                             style={{ ...st.btnIcono, padding: '4px 8px', opacity: fotoIdx === fotos.length - 1 ? 0.4 : 1 }}>▶</button>
+                        {!foto.soloLista && (
+                            <button onClick={() => setCambiandoFoto(true)} title="Cambiar la foto conservando las líneas"
+                                style={{ ...st.btnIcono, padding: '4px 8px' }}>
+                                <ImagePlus size={14} />
+                            </button>
+                        )}
+                        <button onClick={duplicarFoto} title="Duplicar esta foto con todas sus vías"
+                            style={{ ...st.btnIcono, padding: '4px 8px' }}>
+                            <Copy size={14} />
+                        </button>
                         <button onClick={agregarFoto} title="Añadir otra foto"
                             style={{ ...st.btnIcono, background: 'rgba(46,204,113,0.5)', padding: '4px 10px', fontSize: '0.8rem' }}>
                             <Plus size={14} /> Foto
@@ -1635,6 +1674,11 @@ export default function CroquisEscalada({ onExit, croquisInicial, registrarSalid
             </div>
             )}
             </div>
+
+            {cambiandoFoto && (
+                <CambiarFotoModal foto={foto} base={{ w: foto.srcW || imgSize.w, h: foto.srcH || imgSize.h }}
+                    onAsignar={asignarFotoNueva} onClose={() => setCambiandoFoto(false)} />
+            )}
 
             {viaCompartiendo && (
                 <CompartirViaModal croquisId={croquísId.current} via={viaCompartiendo} onClose={() => setViaCompartiendo(null)} />

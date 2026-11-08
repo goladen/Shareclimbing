@@ -8,8 +8,11 @@ import { useAuth } from '../contexts/AuthContext';
 import { Bell, X, Unlink } from 'lucide-react';
 import { DesvincularCroquisModal } from './AsociacionEscuela';
 import RevisarPropuestaModal from './RevisarPropuestaModal';
+import { esAdmin, responderVinculo } from '../utils/equipadores';
 
-export default function NotificacionesCampana({ onVerCroquis, onDesvinculado, onPropuestaAplicada }) {
+const TIPOS_EQUIPADOR = ['equipador_vinculado', 'equipador_rechazado'];
+
+export default function NotificacionesCampana({ onVerCroquis, onDesvinculado, onPropuestaAplicada, onVerEquipador }) {
     const { usuario } = useAuth();
     const [notifs, setNotifs] = useState([]);
     const [abierto, setAbierto] = useState(false);
@@ -36,6 +39,20 @@ export default function NotificacionesCampana({ onVerCroquis, onDesvinculado, on
         return onSnapshot(q, snap => setPropuestas(snap.docs.map(d => ({ id: d.id, ...d.data() }))), e => console.error(e));
     }, [usuario?.uid]);
 
+    // La administración revisa quién pide gestionar una ficha de equipador
+    const [vinculos, setVinculos] = useState([]);
+    const admin = esAdmin(usuario);
+    useEffect(() => {
+        if (!admin) return;
+        const q = query(collection(db, 'equipadores'), where('vinculoPendiente', '==', true));
+        return onSnapshot(q, snap => setVinculos(snap.docs.map(d => ({ id: d.id, ...d.data() }))), e => console.error(e));
+    }, [admin]);
+
+    const responder = async (eq, aceptar, e) => {
+        e.stopPropagation();
+        try { await responderVinculo(eq, aceptar, usuario); } catch (err) { alert('No se pudo completar: ' + err.message); }
+    };
+
     useEffect(() => {
         const handler = (e) => {
             if (!panelRef.current?.contains(e.target)) setAbierto(false);
@@ -46,12 +63,13 @@ export default function NotificacionesCampana({ onVerCroquis, onDesvinculado, on
 
     if (!usuario) return null;
 
-    const noLeidas = notifs.filter(n => !n.leido).length + propuestas.length;
+    const noLeidas = notifs.filter(n => !n.leido).length + propuestas.length + vinculos.length;
 
     const marcarLeida = async (n) => {
         await updateDoc(doc(db, 'notificaciones', usuario.uid, 'items', n.id), { leido: true });
         setAbierto(false);
-        onVerCroquis?.(n.croquisId);
+        if (TIPOS_EQUIPADOR.includes(n.tipo)) onVerEquipador?.(n.equipadorId);
+        else onVerCroquis?.(n.croquisId);
     };
 
     const eliminar = async (id, e) => {
@@ -96,7 +114,22 @@ export default function NotificacionesCampana({ onVerCroquis, onDesvinculado, on
                             </div>
                         </div>
                     ))}
-                    {notifs.length === 0 && propuestas.length === 0 ? (
+                    {vinculos.map(eq => (
+                        <div key={eq.id} onClick={() => { setAbierto(false); onVerEquipador?.(eq.id); }} style={{ ...st.item, background: '#fff8e1' }}>
+                            <div style={{ ...st.punto, background: '#f39c12' }} />
+                            <div style={st.itemCuerpo}>
+                                <div style={st.itemTitulo}>
+                                    <strong>{eq.solicitudVinculo?.nombre || eq.solicitudVinculo?.email}</strong> pide gestionar la ficha de equipador <em>{eq.nombre}</em>
+                                </div>
+                                {eq.solicitudVinculo?.email && <div style={st.itemPreview}>{eq.solicitudVinculo.email}</div>}
+                                <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+                                    <button onClick={(e) => responder(eq, true, e)} style={{ ...st.btnDesvincular, color: '#27ae60', borderColor: '#27ae60' }}>Aprobar</button>
+                                    <button onClick={(e) => responder(eq, false, e)} style={st.btnDesvincular}>Rechazar</button>
+                                </div>
+                            </div>
+                        </div>
+                    ))}
+                    {notifs.length === 0 && propuestas.length === 0 && vinculos.length === 0 ? (
                         <p style={st.vacio}>Sin notificaciones.</p>
                     ) : (
                         notifs.map(n => (
@@ -110,7 +143,9 @@ export default function NotificacionesCampana({ onVerCroquis, onDesvinculado, on
                                     <div style={st.itemTitulo}>
                                         {n.tipo === 'croquis_asociado' && <><strong>{n.autorNombre}</strong> añadió <em>{n.croquisNombre}</em> a tu escuela <em>{n.escuelaNombre}</em></>}
                                         {n.tipo === 'croquis_desvinculado' && <><strong>{n.autorNombre}</strong> desvinculó <em>{n.croquisNombre}</em> de <em>{n.escuelaNombre}</em></>}
-                                        {n.tipo !== 'croquis_asociado' && n.tipo !== 'croquis_desvinculado' && <><strong>{n.autorNombre}</strong> comentó en <em>{n.croquisNombre}</em></>}
+                                        {n.tipo === 'equipador_vinculado' && <>Ya gestionas tu ficha de equipador <em>{n.equipadorNombre}</em></>}
+                                        {n.tipo === 'equipador_rechazado' && <>Se rechazó tu solicitud para gestionar la ficha <em>{n.equipadorNombre}</em></>}
+                                        {n.tipo !== 'croquis_asociado' && n.tipo !== 'croquis_desvinculado' && !TIPOS_EQUIPADOR.includes(n.tipo) && <><strong>{n.autorNombre}</strong> comentó en <em>{n.croquisNombre}</em></>}
                                     </div>
                                     {n.tipo === 'croquis_desvinculado'
                                         ? <div style={st.itemMotivo}>«{n.textoPreview}»</div>

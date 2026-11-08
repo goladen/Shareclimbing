@@ -6,7 +6,7 @@ import { Search, Plus, LogIn, LogOut, Layers, Mountain, User } from 'lucide-reac
 import logo from '../assets/logotopoclimbing.png';
 import EscuelaModal from '../components/EscuelaModal';
 import RocodromoModal from '../components/RocodromoModal';
-import { cargarEquipadores, esDeEquipador, fotosDeCroquis } from '../utils/equipadores';
+import { cargarEquipadores, esAdmin, esDeEquipador, fotosDeCroquis, nombreEquipador, puedeVerEquipador } from '../utils/equipadores';
 import { textoRegion } from '../utils/regiones';
 import { useAccesoDirecto } from '../utils/accesoDirecto';
 import BotonAccesoDirecto from '../components/BotonAccesoDirecto';
@@ -222,6 +222,7 @@ export default function HomePage({ onCrearCroquis, onVerCroquis, onVerPerfil, on
                                 }}
                                 onDesvinculado={cargarCroquis}
                                 onPropuestaAplicada={cargarCroquis}
+                                onVerEquipador={onVerEquipador}
                             />
                             <button onClick={onVerPerfil} className="ocultar-movil" style={{ ...st.btnSalir, color: 'rgba(255,255,255,0.85)' }} title="Perfil"><User size={18} /></button>
                             <button onClick={onVerPerfil} title="Mi perfil" style={{ ...st.avatarCircle, border: 'none', cursor: 'pointer' }}>{(usuario.displayName || usuario.email)[0].toUpperCase()}</button>
@@ -306,7 +307,7 @@ export default function HomePage({ onCrearCroquis, onVerCroquis, onVerPerfil, on
                         Rocódromos <span style={st.contadorBadge}>{rocodromos.length}</span>
                     </button>
                     <button onClick={() => setVistaActiva('equipadores')} style={{ ...st.tab, ...(vistaActiva === 'equipadores' ? st.tabActivo : {}) }}>
-                        Equipadores <span style={st.contadorBadge}>{equipadores.length}</span>
+                        Equipadores <span style={st.contadorBadge}>{equipadores.filter(e => puedeVerEquipador(e, usuario)).length}</span>
                     </button>
                     <button onClick={() => setVistaActiva('juegos')} style={{ ...st.tab, ...(vistaActiva === 'juegos' ? st.tabActivo : {}) }}>
                         🎮 Juegos
@@ -330,14 +331,19 @@ export default function HomePage({ onCrearCroquis, onVerCroquis, onVerPerfil, on
                         ? <div style={st.sinResultados}>Aún no hay equipadores. Se crean al indicar el equipador de una vía.</div>
                         : <div style={{ ...st.grid, gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))' }}>
                             {equipadores
-                                .filter(e => !busqueda || e.nombre?.toLowerCase().includes(busqueda.toLowerCase()))
-                                .sort((a, b) => a.nombre.localeCompare(b.nombre))
+                                .filter(e => puedeVerEquipador(e, usuario))
+                                .filter(e => !busqueda || [e.nombre, e.nombreVisible].some(s => s?.toLowerCase().includes(busqueda.toLowerCase())))
+                                .sort((a, b) => nombreEquipador(a).localeCompare(nombreEquipador(b)))
                                 .map(e => {
                                     const n = croquis.reduce((t, c) => t + fotosDeCroquis(c).reduce((m, f) => m + (f.vias || []).filter(v => esDeEquipador(v.info, e)).length, 0), 0);
                                     return (
                                         <button key={e.id} onClick={() => onVerEquipador(e.id)} style={{ ...st.tarjeta, border: 'none', padding: '14px 16px', textAlign: 'left', fontSize: '1rem' }}>
-                                            <div style={st.tarjetaTitulo}>🔩 {e.nombre}</div>
-                                            <div style={st.tarjetaEscuela}>{n} {n === 1 ? 'vía' : 'vías'}</div>
+                                            <div style={st.tarjetaTitulo}>🔩 {nombreEquipador(e)}{e.usuarioUid && <span title="Ficha gestionada por el propio equipador" style={{ color: '#27ae60', marginLeft: 6 }}>✔</span>}</div>
+                                            <div style={st.tarjetaEscuela}>
+                                                {n} {n === 1 ? 'vía' : 'vías'}
+                                                {e.oculto && ' · oculta'}
+                                                {e.vinculoPendiente && esAdmin(usuario) && ' · solicitud pendiente'}
+                                            </div>
                                         </button>
                                     );
                                 })}

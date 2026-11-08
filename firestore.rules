@@ -73,18 +73,65 @@ service cloud.firestore {
         && tarjeta().croquisId == request.resource.data.croquisId
         && tarjeta().viaId == request.resource.data.viaId
         && tarjeta().creadoPor == request.resource.data.paraUid;
+      // Propuestas de un equipador vinculado sobre sus vías, dirigidas a quien creó el croquis.
+      // Solo puede ponerse a sí mismo como equipador y no cambia el trazado.
+      allow create: if request.auth != null
+        && request.resource.data.keys().hasOnly(['croquisId', 'viaId', 'paraUid', 'autorNombre', 'autorUid', 'equipadorId', 'cambios', 'estado', 'createdAt'])
+        && request.resource.data.autorUid == request.auth.uid
+        && request.resource.data.estado == 'pendiente'
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.autorNombre is string
+        && request.resource.data.autorNombre.size() > 0 && request.resource.data.autorNombre.size() <= 60
+        && request.resource.data.cambios.keys().hasOnly(['info', 'trazado'])
+        && request.resource.data.cambios.get('trazado', null) == null
+        && request.resource.data.cambios.info.equipadorId == request.resource.data.equipadorId
+        && get(/databases/$(database)/documents/equipadores/$(request.resource.data.equipadorId)).data.get('usuarioUid', null) == request.auth.uid
+        && get(/databases/$(database)/documents/croquis_escalada/$(request.resource.data.croquisId)).data.creadoPor == request.resource.data.paraUid;
+      allow read, delete: if request.auth != null && resource.data.get('autorUid', null) == request.auth.uid;
       allow read, delete: if request.auth != null && resource.data.paraUid == request.auth.uid;
       allow update: if request.auth != null && resource.data.paraUid == request.auth.uid
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['estado']);
     }
 
-    // Fichas de equipadores: se crean al indicar el equipador de una vía
+    // Fichas de equipadores: se crean al indicar el equipador de una vía.
+    // Un usuario puede pedir gestionar una ficha; la administración la vincula (usuarioUid).
     match /equipadores/{id} {
+      function cambia() { return request.resource.data.diff(resource.data).affectedKeys(); }
+      function sinDueno() { return resource.data.get('usuarioUid', null) == null; }
+
       allow read: if true;
       allow create: if request.auth != null
         && request.resource.data.creadoPor == request.auth.uid
+        && request.resource.data.nombre is string && request.resource.data.nombre.size() > 0
+        && !request.resource.data.keys().hasAny(['usuarioUid', 'oculto', 'nombreVisible', 'solicitudVinculo', 'vinculoPendiente']);
+
+      // Administración: todo, incluido aprobar o rechazar vínculos
+      allow update, delete: if request.auth != null && request.auth.token.email == 'goladen@gmail.com';
+
+      // Quien creó una ficha sin dueño puede corregir el nombre o borrarla
+      allow update: if request.auth != null && resource.data.creadoPor == request.auth.uid && sinDueno()
+        && cambia().hasOnly(['nombre'])
         && request.resource.data.nombre is string && request.resource.data.nombre.size() > 0;
-      allow update, delete: if request.auth != null && resource.data.creadoPor == request.auth.uid;
+      allow delete: if request.auth != null && resource.data.creadoPor == request.auth.uid && sinDueno();
+
+      // El equipador vinculado elige su nombre visible y si la ficha está oculta, o deja de gestionarla
+      allow update: if request.auth != null && resource.data.get('usuarioUid', null) == request.auth.uid
+        && cambia().hasOnly(['nombreVisible', 'oculto', 'usuarioUid'])
+        && request.resource.data.get('nombreVisible', '') is string
+        && request.resource.data.get('nombreVisible', '').size() <= 60
+        && request.resource.data.get('oculto', false) is bool
+        && (request.resource.data.get('usuarioUid', null) == request.auth.uid
+            || request.resource.data.get('usuarioUid', null) == null);
+
+      // Pedir gestionar una ficha sin dueño (si nadie lo ha pedido ya) o retirar la propia solicitud
+      allow update: if request.auth != null && sinDueno()
+        && cambia().hasOnly(['solicitudVinculo', 'vinculoPendiente'])
+        && ((resource.data.get('vinculoPendiente', false) == false
+             && request.resource.data.vinculoPendiente == true
+             && request.resource.data.solicitudVinculo.uid == request.auth.uid)
+          || (resource.data.get('solicitudVinculo', {}).get('uid', '') == request.auth.uid
+             && request.resource.data.vinculoPendiente == false
+             && request.resource.data.solicitudVinculo == null));
     }
 
     match /solicitudes_edicion/{id} {
@@ -143,6 +190,17 @@ service cloud.firestore {
           && request.resource.data.encadenadoPor.toSet().difference(resource.data.get('encadenadoPor', []).toSet()).hasOnly([request.auth.uid])
           && resource.data.get('encadenadoPor', []).toSet().difference(request.resource.data.encadenadoPor.toSet()).hasOnly([request.auth.uid]);
       }
+    }
+
+    // Itinerarios grabados con GPS: privados de quien los graba
+    match /itinerarios_grabados/{id} {
+      allow read, delete: if request.auth != null && resource.data.creadoPor == request.auth.uid;
+      allow create: if request.auth != null && request.resource.data.creadoPor == request.auth.uid
+        && request.resource.data.puntos is list;
+      allow update: if request.auth != null && resource.data.creadoPor == request.auth.uid
+        && request.resource.data.creadoPor == request.auth.uid
+        && request.resource.data.puntos is list
+        && request.resource.data.puntos.size() <= 2000;
     }
 
     // Notificaciones: cada usuario lee/borra las suyas; cualquier autenticado puede crear

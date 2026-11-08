@@ -1,16 +1,18 @@
 import React, { useState, useEffect } from 'react';
 import { collection, query, where, getDocs, deleteDoc, doc } from 'firebase/firestore';
-import { ArrowLeft, Plus, Globe, Lock, Edit, Trash2, Bell, Mountain } from 'lucide-react';
+import { ArrowLeft, Plus, Globe, Lock, Edit, Trash2, Bell, Mountain, Footprints } from 'lucide-react';
 import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { AsociarEscuelaModal } from '../components/AsociacionEscuela';
+import { nombreEquipador } from '../utils/equipadores';
 
-export default function ProfilePage({ onVolver, onVerCroquis, onEditarCroquis, onCrearCroquis }) {
+export default function ProfilePage({ onVolver, onVerCroquis, onEditarCroquis, onCrearCroquis, onVerEquipador, onGrabarItinerario }) {
     const { usuario } = useAuth();
     const [croquis, setCroquis] = useState([]);
     const [cargando, setCargando] = useState(true);
     const [solicitudesPendientes, setSolicitudesPendientes] = useState(0);
     const [asociando, setAsociando] = useState(null);
+    const [misFichas, setMisFichas] = useState([]);
 
     useEffect(() => {
         if (!usuario) return;
@@ -38,6 +40,9 @@ export default function ProfilePage({ onVolver, onVerCroquis, onEditarCroquis, o
         };
         cargar();
         cargarSolicitudes();
+        getDocs(query(collection(db, 'equipadores'), where('usuarioUid', '==', usuario.uid)))
+            .then(snap => setMisFichas(snap.docs.map(d => ({ id: d.id, ...d.data() }))))
+            .catch(e => console.error(e));
     }, [usuario]);
 
     const eliminar = async (id) => {
@@ -63,6 +68,10 @@ export default function ProfilePage({ onVolver, onVerCroquis, onEditarCroquis, o
                     </div>
                     <div style={{ color: 'rgba(255,255,255,0.55)', fontSize: '0.78rem' }}>Mi perfil de escalador</div>
                 </div>
+                <button onClick={onGrabarItinerario} title="Grabar el acceso con el GPS"
+                    style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 14px', background: 'rgba(255,255,255,0.12)', color: 'white', border: '1px solid rgba(255,255,255,0.3)', borderRadius: 8, fontWeight: 'bold', cursor: 'pointer', fontSize: '0.88rem' }}>
+                    <Footprints size={16} /> Itinerarios
+                </button>
                 <button onClick={() => onCrearCroquis()}
                     style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 14px', background: '#27ae60', color: 'white', border: 'none', borderRadius: 8, fontWeight: 'bold', cursor: 'pointer', fontSize: '0.88rem' }}>
                     <Plus size={16} /> Nuevo croquis
@@ -77,6 +86,19 @@ export default function ProfilePage({ onVolver, onVerCroquis, onEditarCroquis, o
                         Tienes <strong>{solicitudesPendientes}</strong> solicitud{solicitudesPendientes > 1 ? 'es' : ''} de edición pendiente{solicitudesPendientes > 1 ? 's' : ''}.
                         Ábrelas desde cada croquis pulsando el botón <strong>Editores</strong>.
                     </span>
+                </div>
+            )}
+
+            {/* Fichas de equipador que gestiona */}
+            {misFichas.length > 0 && (
+                <div style={{ padding: '12px 20px', background: 'white', borderBottom: '1px solid #ecf0f1', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                    <span style={{ fontSize: '0.85rem', color: '#7f8c8d', fontWeight: 'bold' }}>Mis fichas de equipador:</span>
+                    {misFichas.map(e => (
+                        <button key={e.id} onClick={() => onVerEquipador(e.id)}
+                            style={{ padding: '6px 12px', background: '#f4f6f8', color: '#2c3e50', border: '1px solid #dfe4ea', borderRadius: 16, cursor: 'pointer', fontSize: '0.85rem', fontWeight: 'bold' }}>
+                            🔩 {nombreEquipador(e)}{e.oculto ? ' (oculta)' : ''}
+                        </button>
+                    ))}
                 </div>
             )}
 
