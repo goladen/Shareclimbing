@@ -1,12 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { collection, query, where, getDocs, deleteDoc, doc } from 'firebase/firestore';
-import { ArrowLeft, Plus, Globe, Lock, Edit, Trash2, Bell, Mountain, Footprints } from 'lucide-react';
+import { ArrowLeft, Plus, Globe, Lock, Edit, Trash2, Bell, Mountain, Footprints, Dumbbell } from 'lucide-react';
 import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { AsociarEscuelaModal } from '../components/AsociacionEscuela';
 import { nombreEquipador } from '../utils/equipadores';
 
-export default function ProfilePage({ onVolver, onVerCroquis, onEditarCroquis, onCrearCroquis, onVerEquipador, onGrabarItinerario }) {
+export default function ProfilePage({ onVolver, onVerCroquis, onEditarCroquis, onCrearCroquis, onVerEquipador, onGrabarItinerario, onEntrenamiento }) {
     const { usuario } = useAuth();
     const [croquis, setCroquis] = useState([]);
     const [cargando, setCargando] = useState(true);
@@ -71,6 +71,10 @@ export default function ProfilePage({ onVolver, onVerCroquis, onEditarCroquis, o
                 <button onClick={onGrabarItinerario} title="Grabar el acceso con el GPS"
                     style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 14px', background: 'rgba(255,255,255,0.12)', color: 'white', border: '1px solid rgba(255,255,255,0.3)', borderRadius: 8, fontWeight: 'bold', cursor: 'pointer', fontSize: '0.88rem' }}>
                     <Footprints size={16} /> Itinerarios
+                </button>
+                <button onClick={onEntrenamiento} title="Plan de entrenamiento adaptado a tus tests"
+                    style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 14px', background: 'rgba(255,255,255,0.12)', color: 'white', border: '1px solid rgba(255,255,255,0.3)', borderRadius: 8, fontWeight: 'bold', cursor: 'pointer', fontSize: '0.88rem' }}>
+                    <Dumbbell size={16} /> Entrenamiento
                 </button>
                 <button onClick={() => onCrearCroquis()}
                     style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 14px', background: '#27ae60', color: 'white', border: 'none', borderRadius: 8, fontWeight: 'bold', cursor: 'pointer', fontSize: '0.88rem' }}>

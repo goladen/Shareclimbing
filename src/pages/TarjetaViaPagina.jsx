@@ -12,11 +12,11 @@ const HERRAMIENTAS = [
     { id: 'fin', label: 'Fin', color: '#2ecc71', icon: <CheckCircle size={15} /> },
 ];
 
-const fotosDeDatos = (d) => d.fotos?.length > 0
+export const fotosDeDatos = (d) => d.fotos?.length > 0
     ? d.fotos
     : [{ id: 'f0', imagenUrl: d.imagenUrl, vias: d.vias || [], formas: d.formas || [] }];
 
-const ordenarPuntos = (via) => {
+export const ordenarPuntos = (via) => {
     const dir = via.inicio && via.fin ? via.fin.y - via.inicio.y : -1;
     const inter = [...(via.intermedios || [])].sort((a, b) => dir < 0 ? b.y - a.y : a.y - b.y);
     return [via.inicio, ...inter, via.fin].filter(Boolean);
@@ -94,23 +94,117 @@ function TrazadoVia({ foto, otrasVias, inicio, fin, intermedios, color, herramie
     );
 }
 
+// Valores editables de una vía, con el formato que usa el formulario
+export const valorDeVia = (via) => ({
+    nombre: via?.info?.nombre || '',
+    grado: via?.info?.grado || '',
+    numero: via?.info?.numero || '',
+    equipador: { nombre: via?.info?.equipador || '', id: via?.info?.equipadorId || null },
+    anio: via?.info?.anio || '',
+    info: via?.info?.info || '',
+    inicio: via?.inicio || null,
+    fin: via?.fin || null,
+    intermedios: via?.intermedios || [],
+});
+
+// Cambios con el formato de las propuestas: { info, trazado }
+export const cambiosDeValor = (v, conTrazado) => ({
+    info: {
+        nombre: v.nombre.trim(), grado: v.grado, numero: v.numero.trim(),
+        equipador: v.equipador.nombre.trim(), equipadorId: v.equipador.id,
+        anio: String(v.anio).trim(), info: v.info.trim(),
+    },
+    trazado: conTrazado ? { inicio: v.inicio, fin: v.fin, intermedios: v.intermedios } : null,
+});
+
+// Devuelve el texto del problema, o null si la vía se puede enviar
+export const errorDeValor = (v, conTrazado) => {
+    if (!v.nombre.trim()) return 'La vía necesita un nombre.';
+    if (conTrazado && (!v.inicio || !v.fin)) return 'El trazado necesita punto de inicio y de fin.';
+    return null;
+};
+
+// Datos y trazado de una vía. valor: ver valorDeVia; onChange recibe el valor completo.
+export function FormularioVia({ foto, otrasVias, color, valor, onChange }) {
+    const [herramienta, setHerramienta] = useState(valor.inicio ? 'intermedio' : 'inicio');
+    const [seleccion, setSeleccion] = useState(null);
+    const [zoom, setZoom] = useState(1);
+    const cambiar = (campos) => onChange({ ...valor, ...campos });
+
+    const colocar = (tipo, p) => {
+        if (tipo === 'inicio') { cambiar({ inicio: p }); if (!valor.fin) setHerramienta('fin'); }
+        else if (tipo === 'fin') { cambiar({ fin: p }); setHerramienta('intermedio'); }
+        else cambiar({ intermedios: [...valor.intermedios, p] });
+    };
+
+    const mover = (ref, p) => {
+        if (ref.tipo === 'inicio') cambiar({ inicio: p });
+        else if (ref.tipo === 'fin') cambiar({ fin: p });
+        else cambiar({ intermedios: valor.intermedios.map((q, i) => i === ref.i ? p : q) });
+    };
+
+    const quitarPunto = () => {
+        cambiar({ intermedios: valor.intermedios.filter((_, i) => i !== seleccion.i) });
+        setSeleccion(null);
+    };
+
+    return (
+        <>
+            <label style={st.label}>Nombre de la vía</label>
+            <input value={valor.nombre} onChange={e => cambiar({ nombre: e.target.value })} placeholder="Nombre de la vía" style={st.input} />
+            <label style={st.label}>Grado</label>
+            <GradeSelector value={valor.grado} onChange={v => cambiar({ grado: v })} />
+            <div style={st.dosColumnas}>
+                <div>
+                    <label style={st.label}>Número en la pared</label>
+                    <input value={valor.numero} onChange={e => cambiar({ numero: e.target.value })} placeholder="Ej: 7a" style={st.input} />
+                </div>
+                <div>
+                    <label style={st.label}>Año</label>
+                    <input type="number" value={valor.anio} onChange={e => cambiar({ anio: e.target.value })} placeholder="Ej: 2018" style={st.input} />
+                </div>
+            </div>
+            <label style={st.label}>Equipador/a</label>
+            <EquipadorInput nombre={valor.equipador.nombre} onChange={(n, id) => cambiar({ equipador: { nombre: n, id } })} inputStyle={st.input} />
+            <label style={st.label}>Información adicional</label>
+            <textarea value={valor.info} onChange={e => cambiar({ info: e.target.value })} rows={3} placeholder="Ej: 10 cintas, paso duro en la 3ª chapa." style={{ ...st.input, resize: 'vertical', fontFamily: 'inherit' }} />
+
+            {foto.imagenUrl && (
+                <>
+                    <label style={st.label}>Trazado</label>
+                    <div style={st.herramientas}>
+                        {HERRAMIENTAS.map(h => (
+                            <button key={h.id} onClick={() => { setHerramienta(h.id); setSeleccion(null); }}
+                                style={{ ...st.btnHerramienta, borderColor: h.color, background: herramienta === h.id ? h.color : 'white', color: herramienta === h.id ? 'white' : '#2c3e50' }}>
+                                {h.icon} {h.label}
+                            </button>
+                        ))}
+                        <button onClick={() => setZoom(z => Math.max(1, z - 0.5))} style={st.btnCuadrado} title="Alejar"><Minus size={15} /></button>
+                        <button onClick={() => setZoom(z => Math.min(4, z + 0.5))} style={st.btnCuadrado} title="Acercar"><Plus size={15} /></button>
+                        {seleccion?.tipo === 'intermedio' && (
+                            <button onClick={quitarPunto} style={{ ...st.btnCuadrado, color: '#e74c3c', padding: '0 8px' }}><Trash2 size={14} /> Quitar punto</button>
+                        )}
+                    </div>
+                    <p style={st.ayuda}>Toca la foto para colocar el punto elegido. Arrastra un punto para moverlo.</p>
+                    <div style={st.lienzo}>
+                        <div style={{ width: `${zoom * 100}%` }}>
+                            <TrazadoVia foto={foto} otrasVias={otrasVias} inicio={valor.inicio} fin={valor.fin} intermedios={valor.intermedios}
+                                color={color} herramienta={herramienta} seleccion={seleccion} setSeleccion={setSeleccion}
+                                onColocar={colocar} onMover={mover} />
+                        </div>
+                    </div>
+                </>
+            )}
+        </>
+    );
+}
+
 export default function TarjetaViaPagina({ token, onSalir }) {
     const [estado, setEstado] = useState('cargando'); // cargando | listo | invalida
     const [tarjeta, setTarjeta] = useState(null);
     const [contexto, setContexto] = useState(null); // { titulo, foto, otrasVias, color }
-    const [nombre, setNombre] = useState('');
-    const [grado, setGrado] = useState('');
-    const [numero, setNumero] = useState('');
-    const [equipador, setEquipador] = useState({ nombre: '', id: null });
-    const [anio, setAnio] = useState('');
-    const [infoExtra, setInfoExtra] = useState('');
+    const [valor, setValor] = useState(null);
     const [autorNombre, setAutorNombre] = useState('');
-    const [inicio, setInicio] = useState(null);
-    const [fin, setFin] = useState(null);
-    const [intermedios, setIntermedios] = useState([]);
-    const [herramienta, setHerramienta] = useState('intermedio');
-    const [seleccion, setSeleccion] = useState(null);
-    const [zoom, setZoom] = useState(1);
     const [guardando, setGuardando] = useState(false);
     const [mensaje, setMensaje] = useState(null); // { tipo: 'ok' | 'error', texto }
 
@@ -133,15 +227,7 @@ export default function TarjetaViaPagina({ token, onSalir }) {
                     otrasVias: foto.vias.filter(v => v.id !== t.viaId && v.inicio),
                     color: via.color || '#e74c3c',
                 });
-                setNombre(via.info?.nombre || '');
-                setGrado(via.info?.grado || '');
-                setNumero(via.info?.numero || '');
-                setEquipador({ nombre: via.info?.equipador || '', id: via.info?.equipadorId || null });
-                setAnio(via.info?.anio || '');
-                setInfoExtra(via.info?.info || '');
-                setInicio(via.inicio || null);
-                setFin(via.fin || null);
-                setIntermedios(via.intermedios || []);
+                setValor(valorDeVia(via));
                 setEstado('listo');
             } catch (e) {
                 console.error(e);
@@ -150,30 +236,12 @@ export default function TarjetaViaPagina({ token, onSalir }) {
         })();
     }, [token]);
 
-    const colocar = (tipo, p) => {
-        setMensaje(null);
-        if (tipo === 'inicio') setInicio(p);
-        else if (tipo === 'fin') setFin(p);
-        else setIntermedios(ps => [...ps, p]);
-    };
-
-    const mover = (ref, p) => {
-        setMensaje(null);
-        if (ref.tipo === 'inicio') setInicio(p);
-        else if (ref.tipo === 'fin') setFin(p);
-        else setIntermedios(ps => ps.map((q, i) => i === ref.i ? p : q));
-    };
-
-    const quitarPunto = () => {
-        setIntermedios(ps => ps.filter((_, i) => i !== seleccion.i));
-        setSeleccion(null);
-    };
-
     // Sin registro: la propuesta llega a quien compartió la tarjeta, que decide si se aplica
     const enviar = async () => {
         if (!autorNombre.trim()) { setMensaje({ tipo: 'error', texto: 'Escribe tu nombre para que sepan quién propone el cambio.' }); return; }
-        if (!nombre.trim()) { setMensaje({ tipo: 'error', texto: 'La vía necesita un nombre.' }); return; }
-        if (contexto.foto.imagenUrl && (!inicio || !fin)) { setMensaje({ tipo: 'error', texto: 'El trazado necesita punto de inicio y de fin.' }); return; }
+        const conTrazado = Boolean(contexto.foto.imagenUrl);
+        const problema = errorDeValor(valor, conTrazado);
+        if (problema) { setMensaje({ tipo: 'error', texto: problema }); return; }
         setGuardando(true);
         setMensaje(null);
         try {
@@ -183,14 +251,7 @@ export default function TarjetaViaPagina({ token, onSalir }) {
                 viaId: tarjeta.viaId,
                 paraUid: tarjeta.creadoPor,
                 autorNombre: autorNombre.trim().slice(0, 60),
-                cambios: {
-                    info: {
-                        nombre: nombre.trim(), grado, numero: numero.trim(),
-                        equipador: equipador.nombre.trim(), equipadorId: equipador.id,
-                        anio: String(anio).trim(), info: infoExtra.trim(),
-                    },
-                    trazado: contexto.foto.imagenUrl ? { inicio, fin, intermedios } : null,
-                },
+                cambios: cambiosDeValor(valor, conTrazado),
                 estado: 'pendiente',
                 createdAt: serverTimestamp(),
             });
@@ -202,14 +263,7 @@ export default function TarjetaViaPagina({ token, onSalir }) {
     };
 
     if (estado === 'cargando') return <div style={st.pantallaMensaje}>Cargando…</div>;
-    if (estado === 'invalida') {
-        return (
-            <div style={st.pantallaMensaje}>
-                <p>Este enlace ya no está disponible. Puede que lo hayan desactivado o que la vía se haya eliminado.</p>
-                <button onClick={onSalir} style={{ ...st.btnGuardar, background: '#2c3e50', marginTop: 14 }}>Ir al inicio</button>
-            </div>
-        );
-    }
+    if (estado === 'invalida') return <EnlaceNoDisponible onSalir={onSalir} />;
 
     return (
         <div style={st.app}>
@@ -225,61 +279,36 @@ export default function TarjetaViaPagina({ token, onSalir }) {
             <div style={st.scroll}>
                 <div style={st.tarjeta}>
                     {mensaje && <div style={mensaje.tipo === 'ok' ? st.ok : st.error}>{mensaje.texto}</div>}
-                    <label style={st.label}>Tu nombre *</label>
-                    <input value={autorNombre} onChange={e => { setAutorNombre(e.target.value); setMensaje(null); }} maxLength={60} placeholder="Para que sepan quién propone el cambio" style={st.input} />
-                    <p style={st.ayuda}>Tu propuesta llegará a quien compartió esta vía. Si la acepta, aparecerás como colaborador.</p>
-                    <label style={st.label}>Nombre de la vía</label>
-                    <input value={nombre} onChange={e => { setNombre(e.target.value); setMensaje(null); }} placeholder="Nombre de la vía" style={st.input} />
-                    <label style={st.label}>Grado</label>
-                    <GradeSelector value={grado} onChange={v => { setGrado(v); setMensaje(null); }} />
-                    <div style={st.dosColumnas}>
-                        <div>
-                            <label style={st.label}>Número en la pared</label>
-                            <input value={numero} onChange={e => setNumero(e.target.value)} placeholder="Ej: 7a" style={st.input} />
-                        </div>
-                        <div>
-                            <label style={st.label}>Año</label>
-                            <input type="number" value={anio} onChange={e => setAnio(e.target.value)} placeholder="Ej: 2018" style={st.input} />
-                        </div>
-                    </div>
-                    <label style={st.label}>Equipador/a</label>
-                    <EquipadorInput nombre={equipador.nombre} onChange={(n, id) => setEquipador({ nombre: n, id })} inputStyle={st.input} />
-                    <label style={st.label}>Información adicional</label>
-                    <textarea value={infoExtra} onChange={e => setInfoExtra(e.target.value)} rows={3} placeholder="Ej: 10 cintas, paso duro en la 3ª chapa." style={{ ...st.input, resize: 'vertical', fontFamily: 'inherit' }} />
-
-                    {contexto.foto.imagenUrl && (
-                        <>
-                            <label style={st.label}>Trazado</label>
-                            <div style={st.herramientas}>
-                                {HERRAMIENTAS.map(h => (
-                                    <button key={h.id} onClick={() => { setHerramienta(h.id); setSeleccion(null); }}
-                                        style={{ ...st.btnHerramienta, borderColor: h.color, background: herramienta === h.id ? h.color : 'white', color: herramienta === h.id ? 'white' : '#2c3e50' }}>
-                                        {h.icon} {h.label}
-                                    </button>
-                                ))}
-                                <button onClick={() => setZoom(z => Math.max(1, z - 0.5))} style={st.btnCuadrado} title="Alejar"><Minus size={15} /></button>
-                                <button onClick={() => setZoom(z => Math.min(4, z + 0.5))} style={st.btnCuadrado} title="Acercar"><Plus size={15} /></button>
-                                {seleccion?.tipo === 'intermedio' && (
-                                    <button onClick={quitarPunto} style={{ ...st.btnCuadrado, color: '#e74c3c', padding: '0 8px' }}><Trash2 size={14} /> Quitar punto</button>
-                                )}
-                            </div>
-                            <p style={st.ayuda}>Toca la foto para colocar el punto elegido. Arrastra un punto para moverlo.</p>
-                            <div style={st.lienzo}>
-                                <div style={{ width: `${zoom * 100}%` }}>
-                                    <TrazadoVia foto={contexto.foto} otrasVias={contexto.otrasVias} inicio={inicio} fin={fin} intermedios={intermedios}
-                                        color={contexto.color} herramienta={herramienta} seleccion={seleccion} setSeleccion={setSeleccion}
-                                        onColocar={colocar} onMover={mover} />
-                                </div>
-                            </div>
-                        </>
-                    )}
+                    <CampoAutor valor={autorNombre} onChange={v => { setAutorNombre(v); setMensaje(null); }}
+                        texto="Tu propuesta llegará a quien compartió esta vía. Si la acepta, aparecerás como colaborador." />
+                    <FormularioVia foto={contexto.foto} otrasVias={contexto.otrasVias} color={contexto.color} valor={valor}
+                        onChange={v => { setValor(v); setMensaje(null); }} />
                 </div>
             </div>
         </div>
     );
 }
 
-const st = {
+export function CampoAutor({ valor, onChange, texto }) {
+    return (
+        <>
+            <label style={st.label}>Tu nombre *</label>
+            <input value={valor} onChange={e => onChange(e.target.value)} maxLength={60} placeholder="Para que sepan quién propone el cambio" style={st.input} />
+            <p style={st.ayuda}>{texto}</p>
+        </>
+    );
+}
+
+export function EnlaceNoDisponible({ onSalir }) {
+    return (
+        <div style={st.pantallaMensaje}>
+            <p>Este enlace ya no está disponible. Puede que lo hayan desactivado o que se haya eliminado el contenido.</p>
+            <button onClick={onSalir} style={{ ...st.btnGuardar, background: '#2c3e50', marginTop: 14 }}>Ir al inicio</button>
+        </div>
+    );
+}
+
+export const st = {
     app: { display: 'flex', flexDirection: 'column', height: '100dvh', fontFamily: "'Segoe UI', Tahoma, sans-serif", background: '#f4f6f8' },
     pantallaMensaje: { display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100dvh', fontFamily: 'sans-serif', color: '#7f8c8d', padding: 20, textAlign: 'center' },
     topbar: { background: '#2c3e50', padding: '10px 16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexShrink: 0 },

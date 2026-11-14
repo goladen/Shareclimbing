@@ -106,6 +106,42 @@ export async function modificarVia(croquisId, viaId, transformar) {
     });
 }
 
+// Vía nueva a partir de un cambio de tipo 'nueva' de una propuesta de croquis
+export const viaDeCambioNuevo = (c, id, colaborador) => aplicarAVia(
+    { id, inicio: null, fin: null, intermedios: [], textos: [], color: c.color || '#e74c3c', grosor: 4, info: {} },
+    c, colaborador);
+
+// Aplica varios cambios de una propuesta de croquis en una sola transacción.
+// cambios: [{ tipo: 'editar', fotoId, viaId, info, trazado } | { tipo: 'nueva', fotoId, color, info, trazado }]
+// Devuelve cuántos no se pudieron aplicar (vía o foto eliminadas mientras tanto).
+export async function aplicarCambiosCroquis(croquisId, cambios, colaborador) {
+    const ref = doc(db, 'croquis_escalada', croquisId);
+    let perdidos = 0;
+    await runTransaction(db, async (tx) => {
+        const snap = await tx.get(ref);
+        if (!snap.exists()) throw new Error('El croquis ya no existe.');
+        perdidos = 0;
+        const base = Date.now();
+        const fotos = fotosDeCroquis(snap.data()).map(f => ({ ...f, vias: [...(f.vias || [])] }));
+        cambios.forEach((c, n) => {
+            const f = fotos.find(x => x.id === c.fotoId);
+            if (!f) { perdidos++; return; }
+            if (c.tipo === 'editar') {
+                const i = f.vias.findIndex(v => v.id === c.viaId);
+                if (i < 0) { perdidos++; return; }
+                f.vias[i] = aplicarAVia(f.vias[i], c, colaborador);
+                return;
+            }
+            const nueva = viaDeCambioNuevo(c, base + n, colaborador);
+            // Se coloca según su inicio, de izquierda a derecha, sin reordenar las demás
+            const pos = nueva.inicio ? f.vias.findIndex(v => v.inicio && v.inicio.x > nueva.inicio.x) : -1;
+            if (pos < 0) f.vias.push(nueva); else f.vias.splice(pos, 0, nueva);
+        });
+        tx.update(ref, { fotos, vias: fotos[0]?.vias || [], updatedAt: serverTimestamp() });
+    });
+    return perdidos;
+}
+
 // Cambios de un equipador vinculado en una de sus vías. Si puede editar el croquis se aplican
 // directamente; si no, llegan como propuesta a quien creó el croquis. Devuelve 'aplicado' o 'propuesto'.
 export async function cambiarViaComoEquipador({ equipador, usuario, croquis, via, cambiosInfo }) {

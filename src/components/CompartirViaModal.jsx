@@ -9,11 +9,15 @@ const generarToken = () => {
     return [...bytes].map(b => b.toString(16).padStart(2, '0')).join('');
 };
 
-export const enlaceTarjeta = (token) => `${window.location.origin}${window.location.pathname}#/via/${token}`;
+export const enlaceTarjeta = (token, ruta = "via") => `${window.location.origin}${window.location.pathname}#/${ruta}/${token}`;
 
-// Prepara el enlace de la tarjeta de una vía. El token vive en su propio documento y nunca
-// en el croquis: los croquis públicos los lee cualquiera y el token da permiso para editar.
-export default function CompartirViaModal({ croquisId, via, onClose }) {
+// Prepara el enlace de la tarjeta de una vía o, sin via, el de todo el croquis. El token vive en
+// su propio documento y nunca en el croquis: los croquis públicos los lee cualquiera y el token
+// permite enviar propuestas.
+export default function CompartirViaModal({ croquisId, via = null, onClose }) {
+    const coleccion = via ? "tarjetas_via" : "tarjetas_croquis";
+    const ruta = via ? "via" : "sugerir";
+    const enlace = (t) => enlaceTarjeta(t, ruta);
     const { usuario, setModalAuth } = useAuth();
     const [token, setToken] = useState(null);
     const [estado, setEstado] = useState('cargando'); // cargando | listo | sinGuardar | error
@@ -28,20 +32,20 @@ export default function CompartirViaModal({ croquisId, via, onClose }) {
                 const snap = croquisId ? await getDoc(doc(db, 'croquis_escalada', croquisId)) : null;
                 const datos = snap?.exists() ? snap.data() : null;
                 const fotos = datos?.fotos?.length > 0 ? datos.fotos : [{ vias: datos?.vias || [] }];
-                if (!fotos.some(f => (f.vias || []).some(v => v.id === via.id))) { setEstado('sinGuardar'); return; }
+                if (!datos || (via && !fotos.some(f => (f.vias || []).some(v => v.id === via.id)))) { setEstado('sinGuardar'); return; }
 
                 const existentes = await getDocs(query(
-                    collection(db, 'tarjetas_via'),
+                    collection(db, coleccion),
                     where('creadoPor', '==', usuario.uid),
                     where('croquisId', '==', croquisId),
-                    where('viaId', '==', via.id)
+                    ...(via ? [where('viaId', '==', via.id)] : [])
                 ));
                 let t = existentes.docs[0]?.id;
                 if (!t) {
                     t = generarToken();
-                    await setDoc(doc(db, 'tarjetas_via', t), {
+                    await setDoc(doc(db, coleccion, t), {
                         croquisId,
-                        viaId: via.id,
+                        ...(via ? { viaId: via.id } : {}),
                         creadoPor: usuario.uid,
                         createdAt: serverTimestamp(),
                     });
@@ -56,20 +60,20 @@ export default function CompartirViaModal({ croquisId, via, onClose }) {
     }, []); // eslint-disable-line
 
     const copiar = () => {
-        navigator.clipboard.writeText(enlaceTarjeta(token)).then(() => {
+        navigator.clipboard.writeText(enlace(token)).then(() => {
             setCopiado(true);
             setTimeout(() => setCopiado(false), 2000);
         });
     };
 
     const compartir = () => {
-        navigator.share({ title: `Vía ${via.info?.nombre || ''}`.trim(), url: enlaceTarjeta(token) }).catch(() => {});
+        navigator.share({ title: via ? `Vía ${via.info?.nombre || ''}`.trim() : 'Croquis', url: enlace(token) }).catch(() => {});
     };
 
     const revocar = async () => {
         if (!window.confirm('El enlace dejará de funcionar para todas las personas que lo tengan. ¿Continuar?')) return;
         try {
-            await deleteDoc(doc(db, 'tarjetas_via', token));
+            await deleteDoc(doc(db, coleccion, token));
             onClose();
         } catch (e) {
             setError('No se pudo desactivar: ' + e.message);
@@ -80,19 +84,22 @@ export default function CompartirViaModal({ croquisId, via, onClose }) {
         <div style={st.overlay}>
             <div style={st.modal}>
                 <div style={st.header}>
-                    <h3 style={st.titulo}><Share2 size={18} /> Tarjeta de {via.info?.nombre || 'la vía'}</h3>
+                    <h3 style={st.titulo}><Share2 size={18} /> {via ? <>Tarjeta de {via.info?.nombre || 'la vía'}</> : 'Pedir sugerencias del croquis'}</h3>
                     <button onClick={onClose} style={st.btnClose}><X size={20} /></button>
                 </div>
                 <div style={{ padding: 20 }}>
                     {estado === 'cargando' && <p style={st.texto}>Preparando el enlace…</p>}
-                    {estado === 'sinGuardar' && <p style={st.texto}>Guarda el croquis antes de compartir esta vía.</p>}
+                    {estado === 'sinGuardar' && <p style={st.texto}>Guarda el croquis antes de compartir{via ? ' esta vía' : 'lo'}.</p>}
                     {error && <p style={st.error}>{error}</p>}
                     {estado === 'listo' && (
                         <>
                             <p style={st.texto}>
-                                Quien abra este enlace e inicie sesión podrá cambiar el nombre, el grado y el trazado de la vía. Los cambios se aplican directamente en el croquis, sin revisión.
+                                {via
+                                    ? 'Quien abra este enlace podrá proponer cambios en los datos y el trazado de esta vía, sin necesidad de registrarse.'
+                                    : 'Quien abra este enlace podrá proponer cambios en cualquier vía del croquis y añadir vías nuevas, sin necesidad de registrarse.'}
+                                {' Te llegará como propuesta en las notificaciones y solo se aplica si la aceptas.'}
                             </p>
-                            <input readOnly value={enlaceTarjeta(token)} onFocus={e => e.target.select()} style={st.enlace} />
+                            <input readOnly value={enlace(token)} onFocus={e => e.target.select()} style={st.enlace} />
                             <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
                                 <button onClick={copiar} style={{ ...st.btn, background: copiado ? '#27ae60' : '#3498db' }}>
                                     {copiado ? <Check size={16} /> : <Copy size={16} />} {copiado ? 'Copiado' : 'Copiar enlace'}

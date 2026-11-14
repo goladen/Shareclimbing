@@ -8,17 +8,21 @@ import { useAuth } from '../contexts/AuthContext';
 import { Bell, X, Unlink } from 'lucide-react';
 import { DesvincularCroquisModal } from './AsociacionEscuela';
 import RevisarPropuestaModal from './RevisarPropuestaModal';
+import RevisarPropuestaCroquisModal from './RevisarPropuestaCroquisModal';
 import { esAdmin, responderVinculo } from '../utils/equipadores';
+import { TIPOS_NOTIF_ENTRENO, COL_BLOQUES, COL_INVITACIONES } from '../utils/entrenador';
 
 const TIPOS_EQUIPADOR = ['equipador_vinculado', 'equipador_rechazado'];
 
-export default function NotificacionesCampana({ onVerCroquis, onDesvinculado, onPropuestaAplicada, onVerEquipador }) {
+export default function NotificacionesCampana({ onVerCroquis, onDesvinculado, onPropuestaAplicada, onVerEquipador, onVerRocodromo }) {
     const { usuario } = useAuth();
     const [notifs, setNotifs] = useState([]);
     const [abierto, setAbierto] = useState(false);
     const [desvinculando, setDesvinculando] = useState(null);
     const [propuestas, setPropuestas] = useState([]);
     const [revisando, setRevisando] = useState(null);
+    const [propuestasCroquis, setPropuestasCroquis] = useState([]);
+    const [revisandoCroquis, setRevisandoCroquis] = useState(null);
     const panelRef = useRef();
 
     useEffect(() => {
@@ -39,6 +43,13 @@ export default function NotificacionesCampana({ onVerCroquis, onDesvinculado, on
         return onSnapshot(q, snap => setPropuestas(snap.docs.map(d => ({ id: d.id, ...d.data() }))), e => console.error(e));
     }, [usuario?.uid]);
 
+    // Propuestas enviadas desde el enlace de sugerencias de un croquis entero
+    useEffect(() => {
+        if (!usuario) return;
+        const q = query(collection(db, 'propuestas_croquis'), where('paraUid', '==', usuario.uid), where('estado', '==', 'pendiente'));
+        return onSnapshot(q, snap => setPropuestasCroquis(snap.docs.map(d => ({ id: d.id, ...d.data() }))), e => console.error(e));
+    }, [usuario?.uid]);
+
     // La administración revisa quién pide gestionar una ficha de equipador
     const [vinculos, setVinculos] = useState([]);
     const admin = esAdmin(usuario);
@@ -47,6 +58,23 @@ export default function NotificacionesCampana({ onVerCroquis, onDesvinculado, on
         const q = query(collection(db, 'equipadores'), where('vinculoPendiente', '==', true));
         return onSnapshot(q, snap => setVinculos(snap.docs.map(d => ({ id: d.id, ...d.data() }))), e => console.error(e));
     }, [admin]);
+
+    // La administración revisa los bloques de entrenamiento que proponen los entrenadores
+    const [bloquesPendientes, setBloquesPendientes] = useState([]);
+    useEffect(() => {
+        if (!admin) return;
+        const q = query(collection(db, COL_BLOQUES), where('estado', '==', 'pendiente'));
+        return onSnapshot(q, snap => setBloquesPendientes(snap.docs.map(d => ({ id: d.id, ...d.data() }))), e => console.error(e));
+    }, [admin]);
+
+    // Planes que un entrenador ha preparado para este usuario
+    const [invitacionesPlan, setInvitacionesPlan] = useState([]);
+    useEffect(() => {
+        const email = usuario?.email?.toLowerCase();
+        if (!email) return;
+        const q = query(collection(db, COL_INVITACIONES), where('atletaEmail', '==', email), where('estado', '==', 'pendiente'));
+        return onSnapshot(q, snap => setInvitacionesPlan(snap.docs.map(d => ({ id: d.id, ...d.data() }))), e => console.error(e));
+    }, [usuario?.email]);
 
     const responder = async (eq, aceptar, e) => {
         e.stopPropagation();
@@ -63,12 +91,14 @@ export default function NotificacionesCampana({ onVerCroquis, onDesvinculado, on
 
     if (!usuario) return null;
 
-    const noLeidas = notifs.filter(n => !n.leido).length + propuestas.length + vinculos.length;
+    const noLeidas = notifs.filter(n => !n.leido).length + propuestas.length + propuestasCroquis.length + vinculos.length + bloquesPendientes.length + invitacionesPlan.length;
 
     const marcarLeida = async (n) => {
         await updateDoc(doc(db, 'notificaciones', usuario.uid, 'items', n.id), { leido: true });
         setAbierto(false);
         if (TIPOS_EQUIPADOR.includes(n.tipo)) onVerEquipador?.(n.equipadorId);
+        else if (n.tipo === 'bloque_nuevo') onVerRocodromo?.(n.rocodromoId, n.bloqueId);
+        else if (TIPOS_NOTIF_ENTRENO[n.tipo]) window.location.hash = TIPOS_NOTIF_ENTRENO[n.tipo];
         else onVerCroquis?.(n.croquisId);
     };
 
@@ -114,6 +144,15 @@ export default function NotificacionesCampana({ onVerCroquis, onDesvinculado, on
                             </div>
                         </div>
                     ))}
+                    {propuestasCroquis.map(pr => (
+                        <div key={pr.id} onClick={() => { setAbierto(false); setRevisandoCroquis(pr); }} style={{ ...st.item, background: '#fff8e1' }}>
+                            <div style={{ ...st.punto, background: '#f39c12' }} />
+                            <div style={st.itemCuerpo}>
+                                <div style={st.itemTitulo}><strong>{pr.autorNombre}</strong> propone {pr.cambios?.length || 0} cambio(s) en un croquis</div>
+                                <div style={st.itemPreview}>{(pr.cambios || []).map(c => c.info?.nombre).filter(Boolean).join(', ') || 'Pulsa para revisar'}</div>
+                            </div>
+                        </div>
+                    ))}
                     {vinculos.map(eq => (
                         <div key={eq.id} onClick={() => { setAbierto(false); onVerEquipador?.(eq.id); }} style={{ ...st.item, background: '#fff8e1' }}>
                             <div style={{ ...st.punto, background: '#f39c12' }} />
@@ -129,7 +168,25 @@ export default function NotificacionesCampana({ onVerCroquis, onDesvinculado, on
                             </div>
                         </div>
                     ))}
-                    {notifs.length === 0 && propuestas.length === 0 && vinculos.length === 0 ? (
+                    {invitacionesPlan.map(inv => (
+                        <div key={inv.id} onClick={() => { setAbierto(false); window.location.hash = '#/entrenamiento'; }} style={{ ...st.item, background: '#f5eef8' }}>
+                            <div style={{ ...st.punto, background: '#8e44ad' }} />
+                            <div style={st.itemCuerpo}>
+                                <div style={st.itemTitulo}><strong>{inv.entrenadorNombre}</strong> te ha preparado el plan <em>{inv.plan?.nombre}</em></div>
+                                <div style={st.itemPreview}>Pulsa para verlo y empezarlo</div>
+                            </div>
+                        </div>
+                    ))}
+                    {bloquesPendientes.map(b => (
+                        <div key={b.id} onClick={() => { setAbierto(false); window.location.hash = '#/entrenamiento/catalogo'; }} style={{ ...st.item, background: '#fff8e1' }}>
+                            <div style={{ ...st.punto, background: '#f39c12' }} />
+                            <div style={st.itemCuerpo}>
+                                <div style={st.itemTitulo}><strong>{b.autorNombre}</strong> propone el bloque de entrenamiento <em>{b.nombre}</em></div>
+                                <div style={st.itemPreview}>Pulsa para revisarlo y aprobarlo o rechazarlo</div>
+                            </div>
+                        </div>
+                    ))}
+                    {notifs.length === 0 && propuestas.length === 0 && propuestasCroquis.length === 0 && vinculos.length === 0 && bloquesPendientes.length === 0 && invitacionesPlan.length === 0 ? (
                         <p style={st.vacio}>Sin notificaciones.</p>
                     ) : (
                         notifs.map(n => (
@@ -145,7 +202,13 @@ export default function NotificacionesCampana({ onVerCroquis, onDesvinculado, on
                                         {n.tipo === 'croquis_desvinculado' && <><strong>{n.autorNombre}</strong> desvinculó <em>{n.croquisNombre}</em> de <em>{n.escuelaNombre}</em></>}
                                         {n.tipo === 'equipador_vinculado' && <>Ya gestionas tu ficha de equipador <em>{n.equipadorNombre}</em></>}
                                         {n.tipo === 'equipador_rechazado' && <>Se rechazó tu solicitud para gestionar la ficha <em>{n.equipadorNombre}</em></>}
-                                        {n.tipo !== 'croquis_asociado' && n.tipo !== 'croquis_desvinculado' && !TIPOS_EQUIPADOR.includes(n.tipo) && <><strong>{n.autorNombre}</strong> comentó en <em>{n.croquisNombre}</em></>}
+                                        {n.tipo === 'bloque_nuevo' && <><strong>{n.autorNombre}</strong> creó el bloque <em>{n.bloqueNombre}</em> ({n.bloqueGrado}) en <em>{n.rocodromoNombre}</em></>}
+                                        {n.tipo === 'entreno_sesion' && <><strong>{n.autorNombre}</strong> registró la sesión <em>{n.sesionNombre}</em></>}
+                                        {n.tipo === 'entreno_aceptado' && <><strong>{n.autorNombre}</strong> ha aceptado tu plan</>}
+                                        {n.tipo === 'entreno_entrenador' && <>Tu entrenador <strong>{n.autorNombre}</strong> ha cambiado tu plan</>}
+                                        {n.tipo === 'bloque_aprobado' && <>Se aprobó tu bloque de entrenamiento <em>{n.bloqueNombre}</em></>}
+                                        {n.tipo === 'bloque_rechazado' && <>Se rechazó tu bloque de entrenamiento <em>{n.bloqueNombre}</em></>}
+                                        {n.tipo !== 'croquis_asociado' && n.tipo !== 'croquis_desvinculado' && n.tipo !== 'bloque_nuevo' && !TIPOS_EQUIPADOR.includes(n.tipo) && !TIPOS_NOTIF_ENTRENO[n.tipo] && <><strong>{n.autorNombre}</strong> comentó en <em>{n.croquisNombre}</em></>}
                                     </div>
                                     {n.tipo === 'croquis_desvinculado'
                                         ? <div style={st.itemMotivo}>«{n.textoPreview}»</div>
@@ -168,6 +231,11 @@ export default function NotificacionesCampana({ onVerCroquis, onDesvinculado, on
 
             {revisando && (
                 <RevisarPropuestaModal propuesta={revisando} onClose={() => setRevisando(null)}
+                    onAplicada={(aceptada) => { if (aceptada) onPropuestaAplicada?.(); }} />
+            )}
+
+            {revisandoCroquis && (
+                <RevisarPropuestaCroquisModal propuesta={revisandoCroquis} onClose={() => setRevisandoCroquis(null)}
                     onAplicada={(aceptada) => { if (aceptada) onPropuestaAplicada?.(); }} />
             )}
 

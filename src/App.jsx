@@ -10,9 +10,11 @@ import ProfilePage from './pages/ProfilePage';
 import EscuelaPagina from './pages/EscuelaPagina';
 import RocodromoPagina from './pages/RocodromoPagina';
 import TarjetaViaPagina from './pages/TarjetaViaPagina';
+import CroquisCompartidoPagina from './pages/CroquisCompartidoPagina';
 import EquipadorPagina from './pages/EquipadorPagina';
 import JuegoPikt from './pages/JuegoPikt';
 import GrabarItinerarioPagina from './pages/GrabarItinerarioPagina';
+import EntrenamientoPagina from './pages/EntrenamientoPagina';
 
 const VISTAS_INICIO = ['croquis', 'escuelas', 'rocodromos', 'equipadores', 'juegos'];
 
@@ -22,6 +24,11 @@ function leerHash() {
     if (mi && VISTAS_INICIO.includes(mi[1])) return { tipo: 'inicio', vista: mi[1] };
     const mg = hash.match(/^#\/grabar(?:\/(.+))?$/);
     if (mg) return { tipo: 'grabar', id: mg[1] || null };
+    if (hash === '#/entrenamiento') return { tipo: 'entrenamiento' };
+    const men = hash.match(/^#\/entrenamiento\/(entrenador|catalogo)$/);
+    if (men) return { tipo: 'entrenamiento', vista: men[1] };
+    const mse = hash.match(/^#\/sesion\/([A-Za-z0-9]+)$/);
+    if (mse) return { tipo: 'entrenamiento', sesionId: mse[1] };
     const mc = hash.match(/^#\/croquis\/(.+)$/);
     if (mc) return { tipo: 'croquis', id: mc[1] };
     const mj = hash.match(/^#\/juegos\/([a-z]+)$/);
@@ -30,8 +37,10 @@ function leerHash() {
     if (mq) return { tipo: 'equipador', id: mq[1] };
     const mv = hash.match(/^#\/via\/(.+)$/);
     if (mv) return { tipo: 'via', token: mv[1] };
-    const mr = hash.match(/^#\/rocodromo\/(.+)$/);
-    if (mr) return { tipo: 'rocodromo', id: mr[1] };
+    const ms = hash.match(/^#\/sugerir\/(.+)$/);
+    if (ms) return { tipo: 'sugerir', token: ms[1] };
+    const mr = hash.match(/^#\/rocodromo\/([^/]+)(?:\/bloque\/(.+))?$/);
+    if (mr) return { tipo: 'rocodromo', id: mr[1], bloque: mr[2] || null };
     const me = hash.match(/^#\/escuela\/([^/]+)(?:\/sector\/(.+))?$/);
     if (me) return { tipo: 'escuela', id: me[1], sector: me[2] ? decodeURIComponent(me[2]) : null };
     return null;
@@ -49,10 +58,12 @@ async function resolverHash() {
     }
     if (enlace.tipo === 'juego') return { name: 'juego', path: enlace.path };
     if (enlace.tipo === 'grabar') return { name: 'grabar', id: enlace.id };
+    if (enlace.tipo === 'entrenamiento') return { name: 'entrenamiento', sesionId: enlace.sesionId || null, vista: enlace.vista || null };
     if (enlace.tipo === 'inicio') return { name: 'home', vista: enlace.vista };
     if (enlace.tipo === 'equipador') return { name: 'equipador', id: enlace.id };
     if (enlace.tipo === 'via') return { name: 'tarjetaVia', token: enlace.token };
-    if (enlace.tipo === 'rocodromo') return { name: 'rocodromo', id: enlace.id };
+    if (enlace.tipo === 'sugerir') return { name: 'croquisCompartido', token: enlace.token };
+    if (enlace.tipo === 'rocodromo') return { name: 'rocodromo', id: enlace.id, bloque: enlace.bloque };
     if (enlace.tipo === 'escuela') {
         return { name: 'escuela', id: enlace.id, sector: enlace.sector };
     }
@@ -91,9 +102,9 @@ export default function App() {
         window.history.pushState(null, '', `${window.location.pathname}#/equipador/${id}`);
         setPantalla({ name: 'equipador', id });
     };
-    const irARocodromo = (id) => {
-        window.history.pushState(null, '', `${window.location.pathname}#/rocodromo/${id}`);
-        setPantalla({ name: 'rocodromo', id });
+    const irARocodromo = (id, bloque = null) => {
+        window.history.pushState(null, '', `${window.location.pathname}#/rocodromo/${id}${bloque ? `/bloque/${bloque}` : ''}`);
+        setPantalla({ name: 'rocodromo', id, bloque });
     };
     // croquis = null → nuevo; { escuelaInicial } → nuevo pre-relleno; {...datos} → editar existente
     const irAEditor = (croquis = null) => {
@@ -115,6 +126,10 @@ export default function App() {
     const irAGrabar = (id = null) => {
         window.history.pushState(null, '', `${window.location.pathname}#/grabar${id ? `/${id}` : ''}`);
         setPantalla({ name: 'grabar', id });
+    };
+    const irAEntrenamiento = () => {
+        window.history.pushState(null, '', `${window.location.pathname}#/entrenamiento`);
+        setPantalla({ name: 'entrenamiento' });
     };
 
     if (!pantalla) {
@@ -165,8 +180,11 @@ export default function App() {
             {pantalla.name === 'tarjetaVia' && (
                 <TarjetaViaPagina key={pantalla.token} token={pantalla.token} onSalir={() => irAHome()} />
             )}
+            {pantalla.name === 'croquisCompartido' && (
+                <CroquisCompartidoPagina key={pantalla.token} token={pantalla.token} onSalir={() => irAHome()} />
+            )}
             {pantalla.name === 'rocodromo' && (
-                <RocodromoPagina key={pantalla.id} rocodromoId={pantalla.id} onVolver={() => irAHome('rocodromos')} />
+                <RocodromoPagina key={`${pantalla.id}/${pantalla.bloque || ''}`} rocodromoId={pantalla.id} bloqueInicial={pantalla.bloque} onVolver={() => irAHome('rocodromos')} />
             )}
             {pantalla.name === 'escuela' && (
                 <EscuelaPagina
@@ -182,9 +200,13 @@ export default function App() {
             {pantalla.name === 'grabar' && (
                 <GrabarItinerarioPagina itinerarioId={pantalla.id} onAbrir={irAGrabar} onVolver={() => irAHome()} />
             )}
+            {pantalla.name === 'entrenamiento' && (
+                <EntrenamientoPagina key={pantalla.sesionId || pantalla.vista || 'entrenamiento'} sesionId={pantalla.sesionId} vistaInicial={pantalla.vista} onVolver={() => irAHome()} />
+            )}
             {pantalla.name === 'profile' && (
                 <ProfilePage
                     onGrabarItinerario={() => irAGrabar()}
+                    onEntrenamiento={irAEntrenamiento}
                     onVolver={() => irAHome()}
                     onVerCroquis={irAViewer}
                     onEditarCroquis={irAEditor}

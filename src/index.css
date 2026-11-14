@@ -23,6 +23,8 @@ nav input::placeholder { color: rgba(255,255,255,0.45); }
 .propuesta-trazados { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 12px; }
 
 @media (max-width: 760px) {
+    /* Cambiar foto del rocódromo: una foto encima de otra */
+    .alinear-paneles { grid-template-columns: 1fr !important; grid-template-rows: 1fr 1fr; }
     /* Inicio: cabecera compacta, pestañas en una fila deslizable */
     .home-nav-acciones { width: 100%; gap: 8px !important; }
     .home-nav-acciones > button { padding: 8px 10px !important; font-size: 0.82rem !important; }
@@ -39,4 +41,11 @@ nav input::placeholder { color: rgba(255,255,255,0.45); }
     .ep-bloque { grid-column: span 12; }
     .ep-croquis { flex-direction: column !important; }
     .ep-croquis-foto { width: 100% !important; }
+}
+
+/* Impresión del plan de entrenamiento */
+@media print {
+    .no-imprimir { display: none !important; }
+    .imprimir-plan { min-height: auto !important; }
+    @page { margin: 12mm; }
 }

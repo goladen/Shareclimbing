@@ -58,6 +58,41 @@ service cloud.firestore {
         || get(/databases/$(database)/documents/croquis_escalada/$(resource.data.croquisId)).data.creadoPor == request.auth.uid);
     }
 
+    // Enlaces para proponer cambios en todo un croquis. Igual que las tarjetas de vía, sin viaId.
+    match /tarjetas_croquis/{token} {
+      function croquisDe(id) { return get(/databases/$(database)/documents/croquis_escalada/$(id)).data; }
+      allow get: if true;
+      allow list: if request.auth != null && resource.data.creadoPor == request.auth.uid;
+      allow create: if request.auth != null
+        && request.resource.data.keys().hasOnly(['croquisId', 'creadoPor', 'createdAt'])
+        && request.resource.data.creadoPor == request.auth.uid
+        && (croquisDe(request.resource.data.croquisId).creadoPor == request.auth.uid
+            || request.auth.uid in croquisDe(request.resource.data.croquisId).get('editores', [])
+            || request.auth.token.email in croquisDe(request.resource.data.croquisId).get('editoresEmail', []));
+      allow delete: if request.auth != null && (resource.data.creadoPor == request.auth.uid
+        || croquisDe(resource.data.croquisId).creadoPor == request.auth.uid);
+    }
+
+    // Propuestas enviadas desde el enlace de un croquis, sin registrarse: varias vías
+    // modificadas o nuevas en una sola propuesta, dirigida a quien creó el enlace.
+    match /propuestas_croquis/{id} {
+      function tarjeta() {
+        return get(/databases/$(database)/documents/tarjetas_croquis/$(request.resource.data.token)).data;
+      }
+      allow create: if request.resource.data.keys().hasOnly(['token', 'croquisId', 'paraUid', 'autorNombre', 'cambios', 'estado', 'createdAt'])
+        && request.resource.data.estado == 'pendiente'
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.autorNombre is string
+        && request.resource.data.autorNombre.size() > 0 && request.resource.data.autorNombre.size() <= 60
+        && request.resource.data.cambios is list
+        && request.resource.data.cambios.size() > 0 && request.resource.data.cambios.size() <= 100
+        && tarjeta().croquisId == request.resource.data.croquisId
+        && tarjeta().creadoPor == request.resource.data.paraUid;
+      allow read, delete: if request.auth != null && resource.data.paraUid == request.auth.uid;
+      allow update: if request.auth != null && resource.data.paraUid == request.auth.uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['estado']);
+    }
+
     // Propuestas enviadas desde una tarjeta de vía, sin necesidad de registrarse.
     // Solo se aceptan con un enlace vigente y van dirigidas a quien lo creó.
     match /propuestas_via/{id} {
@@ -177,7 +212,7 @@ service cloud.firestore {
         // El autor del bloque o del rocódromo cambia el bloque, no los ascensos de otros
         allow update: if request.auth != null
           && (resource.data.creadoPor == request.auth.uid || rocodromo().creadoPor == request.auth.uid)
-          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['nombre', 'grado', 'presas']);
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['nombre', 'grado', 'presas', 'modalidades', 'observacion']);
 
         // Marcar o desmarcar «hecho» con su valoración: solo el propio usuario
         allow update: if request.auth != null
@@ -201,6 +236,112 @@ service cloud.firestore {
         && request.resource.data.creadoPor == request.auth.uid
         && request.resource.data.puntos is list
         && request.resource.data.puntos.size() <= 2000;
+    }
+
+    // Entrenamiento: tests y planes privados de cada usuario
+    match /tests_entrenamiento/{id} {
+      allow read, delete: if request.auth != null && resource.data.creadoPor == request.auth.uid;
+      allow create: if request.auth != null && request.resource.data.creadoPor == request.auth.uid;
+    }
+    match /planes_entrenamiento/{id} {
+      function esEntrenador() {
+        return request.auth != null && request.auth.token.email in resource.data.get('entrenadoresEmail', []);
+      }
+      allow read, delete: if request.auth != null && resource.data.creadoPor == request.auth.uid;
+      // Los entrenadores que el atleta ha añadido por email
+      allow get: if esEntrenador();
+      allow list: if request.auth != null && request.auth.token.email in resource.data.entrenadoresEmail;
+      allow create: if request.auth != null && request.resource.data.creadoPor == request.auth.uid
+        && request.resource.data.sesiones is list
+        && request.resource.data.sesiones.size() <= 60;
+      allow update: if request.auth != null && resource.data.creadoPor == request.auth.uid
+        && request.resource.data.creadoPor == request.auth.uid
+        && request.resource.data.sesiones == resource.data.sesiones;
+      // El entrenador ajusta cargas, bloqueos, bloques extra, notas y comentarios; nunca las
+      // sesiones, los registros del atleta ni la lista de entrenadores
+      allow update: if esEntrenador()
+        && request.resource.data.diff(resource.data).affectedKeys()
+             .hasOnly(['ajustes', 'bloqueos', 'extras', 'notasEntrenador', 'comentarios', 'mensajeEntrenador', 'vistoPorEntrenador',
+                       'sesiones', 'semanas', 'plantillaNombre', 'updatedAt'])
+        && request.resource.data.sesiones is list
+        && request.resource.data.sesiones.size() <= 80;
+      // El entrenador se apunta (solo su uid) para recibir avisos de las sesiones
+      allow update: if esEntrenador()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['entrenadoresUid'])
+        && request.resource.data.entrenadoresUid.toSet().difference(resource.data.get('entrenadoresUid', []).toSet()).hasOnly([request.auth.uid])
+        && resource.data.get('entrenadoresUid', []).toSet().difference(request.resource.data.entrenadoresUid.toSet()).size() == 0;
+    }
+
+    // Planes que diseña un entrenador (plantillas): solo los ve y edita él
+    match /planes_entrenador/{id} {
+      allow read, delete: if request.auth != null && resource.data.entrenadorUid == request.auth.uid;
+      allow create: if request.auth != null && request.resource.data.entrenadorUid == request.auth.uid
+        && request.resource.data.sesiones is list && request.resource.data.sesiones.size() <= 80;
+      allow update: if request.auth != null && resource.data.entrenadorUid == request.auth.uid
+        && request.resource.data.entrenadorUid == request.auth.uid
+        && request.resource.data.sesiones is list && request.resource.data.sesiones.size() <= 80;
+    }
+
+    // Invitación de un entrenador a un atleta (por email) para seguir uno de sus planes
+    match /invitaciones_plan/{id} {
+      allow create: if request.auth != null
+        && request.resource.data.entrenadorUid == request.auth.uid
+        && request.resource.data.entrenadorEmail == request.auth.token.email.lower()
+        && request.resource.data.estado == 'pendiente'
+        && request.resource.data.atletaEmail is string;
+      allow read: if request.auth != null && resource.data.entrenadorUid == request.auth.uid;
+      allow read: if request.auth != null && resource.data.atletaEmail == request.auth.token.email.lower();
+      // El entrenador actualiza el plan de las invitaciones pendientes o las cancela
+      allow update: if request.auth != null && resource.data.entrenadorUid == request.auth.uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['plan', 'updatedAt']);
+      allow delete: if request.auth != null && resource.data.entrenadorUid == request.auth.uid;
+      // El atleta la acepta o la rechaza
+      allow update: if request.auth != null && resource.data.atletaEmail == request.auth.token.email.lower()
+        && resource.data.estado == 'pendiente'
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['estado', 'planId', 'respondidaAt'])
+        && request.resource.data.estado in ['aceptada', 'rechazada'];
+    }
+
+    // Catálogo de bloques de entrenamiento: los entrenadores proponen y la administración aprueba
+    match /bloques_entrenamiento/{id} {
+      function esAdmin() { return request.auth != null && request.auth.token.email == 'goladen@gmail.com'; }
+      allow read: if resource.data.estado == 'aprobado';
+      allow read: if request.auth != null && resource.data.autorUid == request.auth.uid;
+      allow read, update, delete: if esAdmin();
+      allow create: if request.auth != null
+        && request.resource.data.autorUid == request.auth.uid
+        && request.resource.data.estado == 'pendiente'
+        && request.resource.data.keys().hasOnly(['autorUid', 'autorNombre', 'nombre', 'categoria', 'descripcion', 'ejercicio', 'estado', 'createdAt'])
+        && request.resource.data.nombre is string
+        && request.resource.data.nombre.size() > 0 && request.resource.data.nombre.size() <= 80
+        && request.resource.data.descripcion.size() <= 1000;
+      // Quien lo propuso puede retirarlo mientras está pendiente
+      allow delete: if request.auth != null && resource.data.autorUid == request.auth.uid && resource.data.estado == 'pendiente';
+    }
+
+    // Sesiones propias con crono. El id es el enlace para compartir: cualquiera con cuenta
+    // que lo conozca la abre; en las listas solo salen las propias y las compartidas por email.
+    match /sesiones_propias/{id} {
+      function valida() {
+        return request.resource.data.creadoPor == request.auth.uid
+          && request.resource.data.nombre is string
+          && request.resource.data.nombre.size() > 0 && request.resource.data.nombre.size() <= 80
+          && request.resource.data.ejercicios is list
+          && request.resource.data.ejercicios.size() <= 40
+          && request.resource.data.compartidaConEmail is list
+          && request.resource.data.compartidaConEmail.size() <= 50;
+      }
+      allow get: if request.auth != null;
+      allow list: if request.auth != null && resource.data.creadoPor == request.auth.uid;
+      allow list: if request.auth != null && request.auth.token.email in resource.data.compartidaConEmail;
+      allow create: if request.auth != null && valida();
+      allow update: if request.auth != null && resource.data.creadoPor == request.auth.uid && valida();
+      allow delete: if request.auth != null && resource.data.creadoPor == request.auth.uid;
+      // Quien la recibió por email puede quitarse de la lista
+      allow update: if request.auth != null
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['compartidaConEmail'])
+        && request.auth.token.email in resource.data.compartidaConEmail
+        && request.resource.data.compartidaConEmail.toSet() == resource.data.compartidaConEmail.toSet().difference([request.auth.token.email].toSet());
     }
 
     // Notificaciones: cada usuario lee/borra las suyas; cualquier autenticado puede crear

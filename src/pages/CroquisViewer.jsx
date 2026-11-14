@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { ArrowLeft, ZoomIn, ZoomOut, Edit, Info, X, Sun, Calendar, MapPin, AlertTriangle, MessageCircle, Trash2, UserPlus, Users, CheckCircle, XCircle, Shield, Mail, Share2, Printer, Mountain, List } from 'lucide-react';
+import { ArrowLeft, ZoomIn, ZoomOut, Edit, Info, X, Sun, Calendar, MapPin, AlertTriangle, MessageCircle, Trash2, UserPlus, Users, CheckCircle, XCircle, Shield, Mail, Share2, Printer, Mountain, List, MessageSquarePlus } from 'lucide-react';
 import ModalImpresion from '../components/ModalImpresion';
 import { db } from '../firebase';
 import { deleteDoc, doc, addDoc, updateDoc, collection, query, where, getDocs, serverTimestamp, arrayUnion, arrayRemove } from 'firebase/firestore';
@@ -10,6 +10,7 @@ import { usePinchZoom } from '../utils/pinchZoom';
 import { ItinerarioVista } from '../components/ItinerarioMapa';
 import { AsociarEscuelaModal } from '../components/AsociacionEscuela';
 import CompartirViaModal from '../components/CompartirViaModal';
+import { cardinal, textoInclinacion } from '../utils/solar';
 import { EquipadorYColaboradores } from '../components/EquipadorInput';
 import { textoRegion } from '../utils/regiones';
 import { ListaReferencias } from '../components/Referencias';
@@ -64,6 +65,7 @@ export default function CroquisViewer({ croquis: croquisProp, onVolver, onEditar
     const [mostrarCombinaciones, setMostrarCombinaciones] = useState(false);
     const [mostrarAsociar, setMostrarAsociar] = useState(false);
     const [viaCompartiendo, setViaCompartiendo] = useState(null);
+    const [compartiendoCroquis, setCompartiendoCroquis] = useState(false);
     const [listaVias, setListaVias] = useConfigListaVias('visor');
 
     const contenedorRef = useRef(null);
@@ -335,6 +337,14 @@ export default function CroquisViewer({ croquis: croquisProp, onVolver, onEditar
                         </button>
                     )}
 
+                    {/* Autor o editor: enlace para que cualquiera proponga cambios sin registrarse */}
+                    {puedeEditar && (
+                        <button onClick={() => setCompartiendoCroquis(true)} style={st.btnIcono} title="Pedir sugerencias: enlace para proponer cambios sin registrarse">
+                            <MessageSquarePlus size={18} />
+                            <span className="ocultar-movil" style={{ color: 'white', fontSize: '0.8rem', marginLeft: 4 }}>Sugerencias</span>
+                        </button>
+                    )}
+
                     {/* Autor o editor: botón editar */}
                     {puedeEditar && (
                         <button onClick={() => onEditar(croquis)} style={{ ...st.btnIcono, background: 'rgba(52,152,219,0.5)' }} title="Editar croquis">
@@ -486,6 +496,9 @@ export default function CroquisViewer({ croquis: croquisProp, onVolver, onEditar
             </div>
             )}
 
+            {compartiendoCroquis && (
+                <CompartirViaModal croquisId={croquis.id} onClose={() => setCompartiendoCroquis(false)} />
+            )}
             {viaCompartiendo && (
                 <CompartirViaModal croquisId={croquis.id} via={viaCompartiendo} onClose={() => setViaCompartiendo(null)} />
             )}
@@ -645,6 +658,9 @@ export default function CroquisViewer({ croquis: croquisProp, onVolver, onEditar
                             {info.escuela && <p><strong>Escuela:</strong> {info.escuela}</p>}
                             {textoRegion(info) && <p><MapPin size={14} style={{ marginRight: 6 }} />{textoRegion(info)}</p>}
                             {info.horarioSol && <p><Sun size={14} style={{ marginRight: 6 }} />{info.horarioSol}</p>}
+                            {info.horarioSolAuto && Number.isFinite(info.orientacion) && (
+                                <p style={{ fontSize: '0.9rem' }}><strong>Pared:</strong> mira al {cardinal(info.orientacion)} ({info.orientacion}°) · {textoInclinacion(info.inclinacion ?? 90)}</p>
+                            )}
                             {info.mejorEpoca && <p><Calendar size={14} style={{ marginRight: 6 }} />{info.mejorEpoca}</p>}
                             {info.acceso && <div style={st.bloque}><strong>Acceso:</strong><p>{info.acceso}</p></div>}
                             {info.restricciones && <div style={{ ...st.bloque, background: '#fef9e7', border: '1px solid #f9ca24' }}><AlertTriangle size={14} /> <strong>Restricciones:</strong><p>{info.restricciones}</p></div>}

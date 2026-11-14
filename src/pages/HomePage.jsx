@@ -6,10 +6,12 @@ import { Search, Plus, LogIn, LogOut, Layers, Mountain, User } from 'lucide-reac
 import logo from '../assets/logotopoclimbing.png';
 import EscuelaModal from '../components/EscuelaModal';
 import RocodromoModal from '../components/RocodromoModal';
+import BotonCompartir, { enlaceRocodromo } from '../components/BotonCompartir';
 import { cargarEquipadores, esAdmin, esDeEquipador, fotosDeCroquis, nombreEquipador, puedeVerEquipador } from '../utils/equipadores';
 import { textoRegion } from '../utils/regiones';
 import { useAccesoDirecto } from '../utils/accesoDirecto';
 import BotonAccesoDirecto from '../components/BotonAccesoDirecto';
+import KofiBoton from '../components/KofiBoton';
 import { TarjetasJuegos } from './JuegoPikt';
 
 const NOMBRE_VISTA = { croquis: 'TopoClimbing', escuelas: 'Escuelas', rocodromos: 'Rocódromos', equipadores: 'Equipadores', juegos: 'Juegos' };
@@ -223,6 +225,7 @@ export default function HomePage({ onCrearCroquis, onVerCroquis, onVerPerfil, on
                                 onDesvinculado={cargarCroquis}
                                 onPropuestaAplicada={cargarCroquis}
                                 onVerEquipador={onVerEquipador}
+                                onVerRocodromo={onVerRocodromo}
                             />
                             <button onClick={onVerPerfil} className="ocultar-movil" style={{ ...st.btnSalir, color: 'rgba(255,255,255,0.85)' }} title="Perfil"><User size={18} /></button>
                             <button onClick={onVerPerfil} title="Mi perfil" style={{ ...st.avatarCircle, border: 'none', cursor: 'pointer' }}>{(usuario.displayName || usuario.email)[0].toUpperCase()}</button>
@@ -283,6 +286,8 @@ export default function HomePage({ onCrearCroquis, onVerCroquis, onVerPerfil, on
                         <Marker key={`r-${r.id}`} position={[r.lat, r.lng]} icon={iconoRocodromo}>
                             <Popup>
                                 <div style={{ fontWeight: 'bold', color: '#2c3e50', marginBottom: 8 }}>🧗 {r.nombre}</div>
+                                <BotonCompartir titulo={r.nombre} url={enlaceRocodromo(r.id)} conTexto
+                                    estilo={{ width: '100%', padding: 7, marginBottom: 6, background: 'white', color: '#2c3e50', border: '1px solid #bdc3c7', borderRadius: 8, fontWeight: 'bold', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }} />
                                 <button onClick={() => onVerRocodromo(r.id)}
                                     style={{ width: '100%', padding: 8, background: '#3498db', color: 'white', border: 'none', borderRadius: 8, fontWeight: 'bold', cursor: 'pointer' }}>
                                     Ver rocódromo
@@ -368,6 +373,7 @@ export default function HomePage({ onCrearCroquis, onVerCroquis, onVerPerfil, on
                                                     ? <img src={r.fotos[0].imagenUrl} alt={r.nombre} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
                                                     : <div style={st.tarjetaImgPlaceholder}>🧗</div>}
                                                 <div style={st.tarjetaBadge}>{r.miembros?.length || 0} {r.miembros?.length === 1 ? 'miembro' : 'miembros'}</div>
+                                                <BotonCompartir titulo={r.nombre} url={enlaceRocodromo(r.id)} estilo={st.btnCompartirTarjeta} />
                                             </div>
                                             <div style={st.tarjetaInfo}>
                                                 <div style={st.tarjetaTitulo}>{r.nombre}</div>
@@ -400,6 +406,12 @@ export default function HomePage({ onCrearCroquis, onVerCroquis, onVerPerfil, on
                         </div>
                 )}
             </div>
+
+            {/* FOOTER */}
+            <footer style={st.footer}>
+                <span>TopoClimbing</span>
+                <KofiBoton style={{ padding: '5px 12px', fontSize: '0.85rem' }} />
+            </footer>
 
             {mostrarModalRocodromo && (
                 <RocodromoModal
@@ -622,6 +634,7 @@ function TarjetaCroquis({ croquis, onVer, onEliminar, usuario }) {
 
 const st = {
     app: { display: 'flex', flexDirection: 'column', height: '100vh', fontFamily: "'Segoe UI', Tahoma, sans-serif", background: '#f4f6f8' },
+    footer: { background: '#2c3e50', color: 'rgba(255,255,255,0.7)', padding: '8px 20px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 16, flexWrap: 'wrap', fontSize: '0.85rem', flexShrink: 0 },
     nav: { background: '#2c3e50', padding: '12px 20px', display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap', zIndex: 100, boxShadow: '0 2px 10px rgba(0,0,0,0.3)' },
     navLogo: { display: 'flex', alignItems: 'center', gap: 10 },
     navTitle: { color: 'white', fontWeight: 'bold', fontSize: '1.2rem', letterSpacing: 0.5 },
@@ -632,7 +645,7 @@ const st = {
     btnCrear: { display: 'flex', alignItems: 'center', gap: 6, padding: '9px 18px', background: '#27ae60', color: 'white', border: 'none', borderRadius: 8, fontWeight: 'bold', cursor: 'pointer', fontSize: '0.9rem' },
     tabs: { display: 'flex', gap: 8, marginBottom: 14, flexWrap: 'wrap' },
     tab: { padding: '8px 18px', borderRadius: 20, border: '2px solid #ecf0f1', background: 'white', color: '#7f8c8d', fontWeight: 'bold', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8, fontSize: '0.9rem' },
-    tabActivo: { background: '#2c3e50', color: 'white', borderColor: '#2c3e50' },
+    tabActivo: { background: '#2c3e50', color: 'white', border: '2px solid #2c3e50' },
     btnLogin: { display: 'flex', alignItems: 'center', gap: 6, padding: '9px 16px', background: 'rgba(255,255,255,0.15)', color: 'white', border: '1px solid rgba(255,255,255,0.3)', borderRadius: 8, fontWeight: 'bold', cursor: 'pointer', fontSize: '0.9rem' },
     btnSalir: { background: 'none', border: 'none', color: 'rgba(255,255,255,0.6)', cursor: 'pointer', padding: 4 },
     usuarioInfo: { display: 'flex', alignItems: 'center', gap: 8 },
@@ -651,6 +664,7 @@ const st = {
     tarjetaImg: { height: 140, background: '#ecf0f1', position: 'relative', overflow: 'hidden' },
     tarjetaImgPlaceholder: { display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', fontSize: 48 },
     tarjetaBadge: { position: 'absolute', top: 8, right: 8, background: 'rgba(0,0,0,0.55)', color: 'white', borderRadius: 12, padding: '3px 10px', fontSize: '0.78rem', fontWeight: 'bold' },
+    btnCompartirTarjeta: { position: 'absolute', bottom: 8, left: 8, display: 'flex', alignItems: 'center', background: 'rgba(0,0,0,0.6)', color: 'white', border: 'none', borderRadius: 8, padding: '7px 10px', cursor: 'pointer', fontSize: '0.78rem', fontWeight: 'bold' },
     btnEliminarTarjeta: { background: 'rgba(0,0,0,0.55)', border: 'none', borderRadius: 8, padding: '7px 10px', cursor: 'pointer', fontSize: '0.85rem', lineHeight: 1 },
     tarjetaInfo: { padding: '12px 14px' },
     tarjetaTitulo: { fontWeight: 'bold', fontSize: '1rem', color: '#2c3e50', marginBottom: 3 },

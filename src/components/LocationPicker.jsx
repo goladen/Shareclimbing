@@ -3,6 +3,23 @@ import { MapContainer, TileLayer, Marker, useMapEvents, useMap } from 'react-lea
 import L from 'leaflet';
 import { Search, MapPin, Crosshair, X, Layers } from 'lucide-react';
 import 'leaflet/dist/leaflet.css';
+import { cardinal, textoInclinacion } from '../utils/solar';
+
+// Flecha desde el sector hacia donde mira la pared, con su inclinación
+export const iconoOrientacion = (orientacion, inclinacion) => L.divIcon({
+    className: '',
+    iconSize: [140, 140],
+    iconAnchor: [70, 70],
+    html: `<div style="position:relative;width:140px;height:140px;pointer-events:none">
+        <svg width="140" height="140" viewBox="0 0 140 140" style="position:absolute;inset:0;transform:rotate(${orientacion}deg)">
+            <path d="M70 22 L70 64 M58 36 L70 18 L82 36" fill="none" stroke="white" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M70 22 L70 64 M58 36 L70 18 L82 36" fill="none" stroke="#e67e22" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <div style="position:absolute;left:50%;top:${orientacion > 90 && orientacion < 270 ? 104 : 2}px;transform:translateX(-50%);white-space:nowrap;background:rgba(230,126,34,0.95);color:white;font:bold 11px sans-serif;padding:2px 6px;border-radius:6px;box-shadow:0 1px 3px rgba(0,0,0,.3)">
+            Mira al ${cardinal(orientacion)} · ${textoInclinacion(inclinacion)}
+        </div>
+    </div>`,
+});
 
 export const CAPAS = {
     callejero: {
@@ -61,7 +78,8 @@ function MapClickHandler({ onClicar }) {
     return null;
 }
 
-export default function LocationPicker({ lat, lng, onChange }) {
+// orientacion e inclinacion (opcionales): se dibuja hacia dónde mira la pared
+export default function LocationPicker({ lat, lng, onChange, orientacion = null, inclinacion = 90 }) {
     const [busqueda, setBusqueda] = useState('');
     const [buscando, setBuscando] = useState(false);
     const [resultados, setResultados] = useState([]);
@@ -179,6 +197,10 @@ export default function LocationPicker({ lat, lng, onChange }) {
                     <MapResizer />
                     {tienePos && <MapFlyTo lat={lat} lng={lng} />}
                     <MapClickHandler onClicar={(la, ln) => onChange(la, ln)} />
+                    {tienePos && Number.isFinite(orientacion) && (
+                        <Marker position={[parseFloat(lat), parseFloat(lng)]} icon={iconoOrientacion(orientacion, inclinacion)}
+                            interactive={false} zIndexOffset={-1000} />
+                    )}
                     {tienePos && (
                         <Marker
                             position={[parseFloat(lat), parseFloat(lng)]}

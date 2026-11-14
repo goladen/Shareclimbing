@@ -4,15 +4,17 @@ import {
     Type, Edit, Info, CheckCircle, Move, ZoomIn, ZoomOut,
     X, ArrowLeft, Image as ImageIcon, MousePointer2, Save,
     Globe, Lock, Layers, Square, Circle, AlignLeft, Printer,
-    ChevronUp, ChevronDown, List, Copy, ImagePlus
+    ChevronUp, ChevronDown, List, Copy, ImagePlus, Sparkles
 } from 'lucide-react';
 import ModalImpresion from './components/ModalImpresion';
+import ImportarIAModal from './components/ImportarIAModal';
 import { db, auth } from './firebase';
 import { collection, doc, addDoc, updateDoc, getDocs, getDoc, serverTimestamp, arrayUnion } from 'firebase/firestore';
 import { useAuth } from './contexts/AuthContext';
 import LocationPicker from './components/LocationPicker';
 import { ItinerarioEditor } from './components/ItinerarioMapa';
 import CompartirViaModal from './components/CompartirViaModal';
+import SolSombraSector from './components/SolSombraSector';
 import EquipadorInput from './components/EquipadorInput';
 import { resolverEquipadores } from './utils/equipadores';
 import { usePinchZoom } from './utils/pinchZoom';
@@ -173,6 +175,7 @@ export default function CroquisEscalada({ onExit, croquisInicial, registrarSalid
 
     // Impresión
     const [mostrarImpresion, setMostrarImpresion] = useState(false);
+    const [mostrarImportarIA, setMostrarImportarIA] = useState(false);
 
     const contenedorRef = useRef(null);
 
@@ -914,6 +917,15 @@ export default function CroquisEscalada({ onExit, croquisInicial, registrarSalid
                             <Camera size={20} /> Hacer Foto / Galería
                             <input type="file" accept="image/*" onChange={handleCargaArchivo} style={{ display: 'none' }} />
                         </label>
+                        <label style={{ ...st.btnCarga, background: '#8e44ad' }}>
+                            <Sparkles size={20} /> Foto con líneas → vías con IA
+                            <input type="file" accept="image/*" style={{ display: 'none' }}
+                                onChange={e => {
+                                    const f = e.target.files[0];
+                                    if (f && f.size / (1024 * 1024) <= MAX_MB) setMostrarImportarIA(true);
+                                    handleCargaArchivo(e);
+                                }} />
+                        </label>
                         <button onClick={cargarPorUrl} style={{ ...st.btnCarga, background: '#f39c12' }}>
                             <LinkIcon size={20} /> Cargar desde URL Pública
                         </button>
@@ -969,6 +981,19 @@ export default function CroquisEscalada({ onExit, croquisInicial, registrarSalid
         <div style={st.appContainer}>
             {modalSalida}
             {avisoGuardado}
+            {mostrarImportarIA && (
+                <ImportarIAModal
+                    srcW={foto.srcW || imgSize.w}
+                    srcH={foto.srcH || imgSize.h}
+                    viasExistentes={vias.length}
+                    onClose={() => setMostrarImportarIA(false)}
+                    onImportar={(nuevas, reemplazar) => {
+                        setVias(prev => reemplazar ? nuevas : [...prev, ...nuevas].sort((a, b) => (a.inicio?.x ?? 0) - (b.inicio?.x ?? 0)));
+                        setMostrarImportarIA(false);
+                        mostrarAviso(`${nuevas.length} vías importadas. Revísalas y guarda.`, 'pendiente');
+                    }}
+                />
+            )}
 
             {/* BARRAS SUPERIORES: en móvil se pueden ocultar para ganar espacio */}
             <div style={ocultarBarras ? { display: 'none' } : { flexShrink: 0 }}>
@@ -993,6 +1018,11 @@ export default function CroquisEscalada({ onExit, croquisInicial, registrarSalid
                             <button onClick={() => setMostrarImpresion(true)} style={st.btnIcono} title="Imprimir / Exportar PNG">
                                 <Printer size={18} />
                             </button>
+                            {!esAjeno && (
+                                <button onClick={() => setMostrarImportarIA(true)} style={{ ...st.btnIcono, background: 'rgba(142,68,173,0.5)' }} title="Importar vías con IA (Gemini)">
+                                    <Sparkles size={18} />
+                                </button>
+                            )}
                         </>
                     )}
                     <div style={st.divider} />
@@ -1726,11 +1756,15 @@ export default function CroquisEscalada({ onExit, croquisInicial, registrarSalid
                                     lat={infoCroquis.lat}
                                     lng={infoCroquis.lng}
                                     onChange={(la, ln) => setInfoCroquis(p => ({ ...p, lat: la, lng: ln }))}
+                                    orientacion={infoCroquis.horarioSolAuto ? infoCroquis.orientacion : null}
+                                    inclinacion={infoCroquis.inclinacion}
                                 />
                                 <label style={{ ...st.label, marginTop: 12 }}>Enlace Google Maps (opcional, para compartir)</label>
                                 <input value={infoCroquis.mapsUrl} onChange={e => setInfoCroquis(p => ({ ...p, mapsUrl: e.target.value }))}
                                     placeholder="https://maps.app.goo.gl/..." style={st.input} />
                             </div>
+                            <SolSombraSector info={infoCroquis} onChange={campos => setInfoCroquis(p => ({ ...p, ...campos }))}
+                                inputStyle={st.input} labelStyle={st.label} />
                             <div style={{ marginBottom: 15 }}>
                                 <label style={st.label}>Itinerario hasta el sector</label>
                                 <ItinerarioEditor
@@ -1740,10 +1774,7 @@ export default function CroquisEscalada({ onExit, croquisInicial, registrarSalid
                                     lng={infoCroquis.lng}
                                 />
                             </div>
-                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 15 }}>
-                                <InputModal label="Horario sol/sombra" value={infoCroquis.horarioSol} onChange={v => setInfoCroquis(p => ({ ...p, horarioSol: v }))} ph="Ej: Sombra todo el año" />
-                                <InputModal label="Mejor época" value={infoCroquis.mejorEpoca} onChange={v => setInfoCroquis(p => ({ ...p, mejorEpoca: v }))} ph="Ej: Marzo - Noviembre" />
-                            </div>
+                            <InputModal label="Mejor época" value={infoCroquis.mejorEpoca} onChange={v => setInfoCroquis(p => ({ ...p, mejorEpoca: v }))} ph="Ej: Marzo - Noviembre" />
                             <div style={{ marginBottom: 15 }}>
                                 <label style={st.label}>Acceso (cómo llegar)</label>
                                 <textarea value={infoCroquis.acceso} onChange={e => setInfoCroquis(p => ({ ...p, acceso: e.target.value }))}

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Check, Edit, Trash2, SlidersHorizontal, Star, X } from 'lucide-react';
 
 export const GRADOS_BLOQUE = ['3', '4a', '4b', '4c', '5a', '5b', '5c', '6a', '6a+', '6b', '6b+', '6c', '6c+', '7a', '7a+', '7b', '7b+', '7c', '7c+', '8a', '8a+', '8b', '8b+', '8c'];
@@ -18,7 +18,28 @@ export function resumenBloque(b) {
     return { media, numValoraciones: conEstrellas.length, gradoPropuesto, numVotos, ascensos: (b.encadenadoPor || []).length };
 }
 
-const FILTROS_INICIALES = { estado: 'todos', desde: '', hasta: '', creador: '', ascensos: '', orden: 'grado' };
+// Formas de hacer un mismo bloque; cada una puede tener su propio grado
+export const MODALIDADES = [
+    { id: 'pieMano', label: 'Pie-mano', desc: 'Los pies solo en las presas marcadas' },
+    { id: 'piesLibres', label: 'Pies libres', desc: 'Los pies en cualquier presa' },
+    { id: 'piesPequenos', label: 'Pies pequeños', desc: 'Los pies solo en presas pequeñas o en las marcadas como «Solo pie»' },
+];
+export const nombreModalidad = (id) => MODALIDADES.find(m => m.id === id)?.label || id;
+
+export function ChipsModalidades({ bloque, tam = '0.72rem' }) {
+    if (!bloque.modalidades?.length) return null;
+    return (
+        <span style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 3 }}>
+            {bloque.modalidades.map(m => (
+                <span key={m.id} style={{ background: '#eaf2f8', color: '#1f618d', borderRadius: 10, padding: '1px 7px', fontSize: tam, fontWeight: 'bold', whiteSpace: 'nowrap' }}>
+                    {nombreModalidad(m.id)}{m.grado ? ` ${m.grado}` : ''}
+                </span>
+            ))}
+        </span>
+    );
+}
+
+const FILTROS_INICIALES = { estado: 'todos', desde: '', hasta: '', creador: '', ascensos: '', forma: '', orden: 'grado' };
 
 const ORDENES = {
     grado: (a, b) => indiceGrado(a.grado) - indiceGrado(b.grado),
@@ -39,7 +60,7 @@ export function Estrellas({ valor, tam = 14 }) {
 }
 
 // Lista de bloques de una foto con filtros, pensada sobre todo para el móvil
-export function ListaBloques({ bloques, usuario, esPropietario, bloqueId, onSeleccionar, onEditar, onEliminar, onValorar }) {
+export function ListaBloques({ bloques, usuario, esPropietario, bloqueId, onSeleccionar, onEditar, onEliminar, onValorar, onVisibles }) {
     const [filtros, setFiltros] = useState(FILTROS_INICIALES);
     const [mostrarFiltros, setMostrarFiltros] = useState(false);
     const cambiar = (campo, valor) => setFiltros(f => ({ ...f, [campo]: valor }));
@@ -57,10 +78,15 @@ export function ListaBloques({ bloques, usuario, esPropietario, bloqueId, onSele
         const asc = (b.encadenadoPor || []).length;
         if (filtros.ascensos === '0' && asc !== 0) return false;
         if (filtros.ascensos && filtros.ascensos !== '0' && asc < Number(filtros.ascensos)) return false;
+        if (filtros.forma && !(b.modalidades || []).some(m => m.id === filtros.forma)) return false;
         return true;
     }).sort(ORDENES[filtros.orden]);
 
-    const activos = ['desde', 'hasta', 'creador', 'ascensos'].filter(k => filtros[k]).length;
+    const activos = ['desde', 'hasta', 'creador', 'ascensos', 'forma'].filter(k => filtros[k]).length;
+
+    // La página usa este orden para pasar de un bloque a otro deslizando la foto
+    const claveVisibles = visibles.map(b => b.id).join(',');
+    useEffect(() => { onVisibles?.(visibles.map(b => b.id)); }, [claveVisibles]); // eslint-disable-line
 
     return (
         <div>
@@ -106,6 +132,12 @@ export function ListaBloques({ bloques, usuario, esPropietario, bloqueId, onSele
                             <option value="10">Al menos 10</option>
                         </select>
                     </label>
+                    <label style={{ ...st.campo, gridColumn: '1 / -1' }}>Forma
+                        <select value={filtros.forma} onChange={e => cambiar('forma', e.target.value)} style={st.select} aria-label="Forma">
+                            <option value="">Cualquiera</option>
+                            {MODALIDADES.map(m => <option key={m.id} value={m.id}>{m.label}</option>)}
+                        </select>
+                    </label>
                     <label style={{ ...st.campo, gridColumn: '1 / -1' }}>Ordenar por
                         <select value={filtros.orden} onChange={e => cambiar('orden', e.target.value)} style={st.select} aria-label="Ordenar por">
                             <option value="grado">Grado (de fácil a difícil)</option>
@@ -138,8 +170,9 @@ export function ListaBloques({ bloques, usuario, esPropietario, bloqueId, onSele
                                 <strong style={{ color: '#2c3e50', overflowWrap: 'anywhere', display: 'block' }}>{b.nombre || 'Bloque sin nombre'}</strong>
                                 <span style={st.detalle}>
                                     {r.media !== null && <><Estrellas valor={r.media} tam={12} /> {r.media.toFixed(1)} · </>}
-                                    {r.ascensos} {r.ascensos === 1 ? 'ascenso' : 'ascensos'} · {b.creadoPorNombre}
+                                    {r.ascensos} {r.ascensos === 1 ? 'ascenso' : 'ascensos'} · {b.creadoPorNombre}{b.observacion ? ' · 💬' : ''}
                                 </span>
+                                <ChipsModalidades bloque={b} />
                                 {r.gradoPropuesto && r.gradoPropuesto !== b.grado && (
                                     <span style={st.detalle}>Grado propuesto: <strong>{r.gradoPropuesto}</strong> ({r.numVotos} {r.numVotos === 1 ? 'voto' : 'votos'})</span>
                                 )}
@@ -218,7 +251,7 @@ const st = {
     segmento: { flex: 1, padding: '8px 4px', border: 'none', borderRadius: 8, background: 'none', color: '#566573', fontWeight: 'bold', fontSize: '0.82rem', cursor: 'pointer', whiteSpace: 'nowrap' },
     segmentoActivo: { background: 'white', color: '#2c3e50', boxShadow: '0 1px 3px rgba(0,0,0,0.15)' },
     btnFiltros: { display: 'flex', alignItems: 'center', gap: 5, padding: '9px 12px', background: 'white', color: '#2c3e50', border: '1px solid #bdc3c7', borderRadius: 10, fontWeight: 'bold', fontSize: '0.82rem', cursor: 'pointer', whiteSpace: 'nowrap', marginLeft: 'auto' },
-    btnFiltrosActivo: { background: '#2c3e50', color: 'white', borderColor: '#2c3e50' },
+    btnFiltrosActivo: { background: '#2c3e50', color: 'white', border: '1px solid #2c3e50' },
     panel: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, background: 'white', border: '1px solid #ecf0f1', borderRadius: 10, padding: 12, marginBottom: 8 },
     campo: { display: 'flex', flexDirection: 'column', gap: 4, fontSize: '0.75rem', fontWeight: 'bold', color: '#566573', minWidth: 0 },
     select: { width: '100%', padding: '9px 8px', border: '1px solid #bdc3c7', borderRadius: 8, fontSize: '0.92rem', color: '#2c3e50', background: 'white' },
@@ -231,7 +264,7 @@ const st = {
     detalle: { display: 'block', fontSize: '0.76rem', color: '#7f8c8d', marginTop: 2 },
     acciones: { display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4, flexShrink: 0 },
     btnHecho: { display: 'flex', alignItems: 'center', gap: 3, padding: '8px 10px', background: 'white', color: '#566573', border: '1px solid #bdc3c7', borderRadius: 8, cursor: 'pointer', fontSize: '0.8rem', fontWeight: 'bold', minWidth: 74, justifyContent: 'center' },
-    btnHechoActivo: { background: '#27ae60', color: 'white', borderColor: '#27ae60' },
+    btnHechoActivo: { background: '#27ae60', color: 'white', border: '1px solid #27ae60' },
     btnIcono: { background: 'none', border: 'none', color: '#7f8c8d', cursor: 'pointer', padding: 6, display: 'flex' },
     overlay: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', zIndex: 2500 },
     modal: { background: 'white', width: '100%', maxWidth: 440, borderRadius: '16px 16px 0 0', overflow: 'hidden', boxShadow: '0 -10px 40px rgba(0,0,0,0.3)', paddingBottom: 'env(safe-area-inset-bottom)' },
