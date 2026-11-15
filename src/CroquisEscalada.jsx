@@ -4,8 +4,9 @@ import {
     Type, Edit, Info, CheckCircle, Move, ZoomIn, ZoomOut,
     X, ArrowLeft, Image as ImageIcon, MousePointer2, Save,
     Globe, Lock, Layers, Square, Circle, AlignLeft, Printer,
-    ChevronUp, ChevronDown, List, Copy, ImagePlus, Sparkles
+    ChevronUp, ChevronDown, List, Copy, ImagePlus, Sparkles, Anchor
 } from 'lucide-react';
+import { MarcasReunion, LargosVia, reunionesOrdenadas } from './utils/reuniones';
 import ModalImpresion from './components/ModalImpresion';
 import ImportarIAModal from './components/ImportarIAModal';
 import { db, auth } from './firebase';
@@ -15,6 +16,7 @@ import LocationPicker from './components/LocationPicker';
 import { ItinerarioEditor } from './components/ItinerarioMapa';
 import CompartirViaModal from './components/CompartirViaModal';
 import SolSombraSector from './components/SolSombraSector';
+import { paredDeFoto, nombreFoto } from './utils/solar';
 import EquipadorInput from './components/EquipadorInput';
 import { resolverEquipadores } from './utils/equipadores';
 import { usePinchZoom } from './utils/pinchZoom';
@@ -172,6 +174,8 @@ export default function CroquisEscalada({ onExit, croquisInicial, registrarSalid
 
     // Editar info de via existente
     const [editandoInfoViaIdx, setEditandoInfoViaIdx] = useState(null);
+    // Reunión recién colocada a la que se pone grado: { viaIdx (null = vía en creación), pIdx, grado }
+    const [gradoReunion, setGradoReunion] = useState(null);
 
     // Impresión
     const [mostrarImpresion, setMostrarImpresion] = useState(false);
@@ -200,6 +204,11 @@ export default function CroquisEscalada({ onExit, croquisInicial, registrarSalid
     const [mostrarAnotaciones, setMostrarAnotaciones] = useState(false);
     const [barrasOcultas, setBarrasOcultas] = useState(false);
     const [viaCompartiendo, setViaCompartiendo] = useState(null);
+    // Sol y sombra: fotos del sector (cada una puede ser una pared distinta) y la que se ajusta
+    const [fotoSol, setFotoSol] = useState(null);
+    const fotosSol = fotos.map((f, idx) => ({ foto: f, idx })).filter(f => f.foto.imagenUrl || f.foto.soloLista);
+    const fotoSolIdx = fotosSol.some(f => f.idx === fotoSol) ? fotoSol
+        : fotosSol.some(f => f.idx === fotoIdx) ? fotoIdx : fotosSol[0]?.idx ?? -1;
     const [cambiandoFoto, setCambiandoFoto] = useState(false);
 
     useEffect(() => {
@@ -381,6 +390,9 @@ export default function CroquisEscalada({ onExit, croquisInicial, registrarSalid
                     ...(f.nombre ? { nombre: f.nombre } : {}),
                     srcW: f.srcW || null,
                     srcH: f.srcH || null,
+                    // Pared de la foto para el cálculo de sol y sombra
+                    ...(Number.isFinite(f.orientacion) ? { orientacion: f.orientacion } : {}),
+                    ...(Number.isFinite(f.inclinacion) ? { inclinacion: f.inclinacion } : {}),
                     vias: (await resolverEquipadores(f.vias || [], auth.currentUser?.uid)).map(v => ({ id: v.id, inicio: v.inicio, fin: v.fin, intermedios: v.intermedios, textos: v.textos, info: v.info, color: v.color, grosor: v.grosor || 4 })),
                     formas: f.formas || [],
                     combinaciones: (f.combinaciones || []).map(c => ({ id: c.id, inicio: c.inicio, fin: c.fin, intermedios: c.intermedios, textos: c.textos, info: c.info, color: c.color, grosor: c.grosor || 4 }))
@@ -783,6 +795,15 @@ export default function CroquisEscalada({ onExit, croquisInicial, registrarSalid
             else if (enEdicionCombi) setCombinaciones(prev => { const c = [...prev]; c[editandoCombinacionIdx] = { ...c[editandoCombinacionIdx], intermedios: [...c[editandoCombinacionIdx].intermedios, { x, y }] }; return c; });
             else if (esCreandoCombinacion) setCombinacionActual(prev => ({ ...prev, intermedios: [...prev.intermedios, { x, y }] }));
             else setViaActual(prev => ({ ...prev, intermedios: [...prev.intermedios, { x, y }] }));
+        } else if (herramienta === 'REUNION') {
+            const r = { x, y, reunion: true, grado: '' };
+            if (enEdicionVia) {
+                setGradoReunion({ viaIdx: editandoViaIdx, pIdx: vias[editandoViaIdx].intermedios.length, grado: '' });
+                setVias(prev => { const c = [...prev]; c[editandoViaIdx] = { ...c[editandoViaIdx], intermedios: [...c[editandoViaIdx].intermedios, r] }; return c; });
+            } else if (creando) {
+                setGradoReunion({ viaIdx: null, pIdx: viaActual.intermedios.length, grado: '' });
+                setViaActual(prev => ({ ...prev, intermedios: [...prev.intermedios, r] }));
+            }
         } else if (herramienta === 'GRADO') {
             const g = enEdicionVia ? (vias[editandoViaIdx]?.info?.grado || '')
                 : enEdicionCombi ? (combinaciones[editandoCombinacionIdx]?.info?.grado || '')
@@ -848,7 +869,7 @@ export default function CroquisEscalada({ onExit, croquisInicial, registrarSalid
             const via = { ...copia[viaIdx], intermedios: [...copia[viaIdx].intermedios] };
             if (tipo === 'inicio') via.inicio = { x, y };
             else if (tipo === 'fin') via.fin = { x, y };
-            else via.intermedios[pIdx] = { x, y };
+            else via.intermedios[pIdx] = { ...via.intermedios[pIdx], x, y };
             copia[viaIdx] = via;
             return copia;
         });
@@ -1185,6 +1206,7 @@ export default function CroquisEscalada({ onExit, croquisInicial, registrarSalid
                             <ToolBtn h="PAN" act={herramienta} set={setHerramienta} icon={<Move size={16} />} text="Mover" color="#34495e" />
                             <ToolBtn h="INICIO" act={herramienta} set={setHerramienta} icon={<MapPin size={16} />} text="Inicio" color="#e74c3c" />
                             <ToolBtn h="INTERMEDIO" act={herramienta} set={setHerramienta} icon={<MousePointer2 size={16} />} text="P.Intermedio" color="#f39c12" />
+                            {!esCombi && <ToolBtn h="REUNION" act={herramienta} set={setHerramienta} icon={<Anchor size={16} />} text="Reunión" color={COLOR_REUNION} />}
                             <ToolBtn h="FIN" act={herramienta} set={setHerramienta} icon={<CheckCircle size={16} />} text="Fin" color="#2ecc71" />
                             <ToolBtn h="GRADO" act={herramienta} set={setHerramienta} icon={<Type size={16} />} text="Grado" color="#9b59b6" />
                             <ToolBtn h="TEXTO" act={herramienta} set={setHerramienta} icon={<Edit size={16} />} text="Texto" color="#3498db" />
@@ -1213,7 +1235,7 @@ export default function CroquisEscalada({ onExit, croquisInicial, registrarSalid
                         </div>
                         {herramienta !== 'PAN' && (
                             <div style={{ fontSize: '0.85rem', color: '#e74c3c', fontWeight: 'bold', marginTop: 6, textAlign: 'center' }}>
-                                Clic en la imagen para añadir: {herramienta}
+                                Clic en la imagen para añadir: {herramienta === 'REUNION' ? 'REUNIÓN (fin de un largo)' : herramienta}
                             </div>
                         )}
                     </div>
@@ -1357,6 +1379,7 @@ export default function CroquisEscalada({ onExit, croquisInicial, registrarSalid
                                             <text x={ix} y={iy + 25} fill="white" fontSize="16" fontWeight="bold" textAnchor="middle">{idx + 1}</text>
                                         </>
                                     )}
+                                    <MarcasReunion via={via} xRatio={xRatio} yRatio={yRatio} />
                                     {via.fin && (
                                         <>
                                             <circle cx={fx} cy={fy} r="18" fill="none" stroke={via.color} strokeWidth="4" opacity="0.6" />
@@ -1373,7 +1396,7 @@ export default function CroquisEscalada({ onExit, croquisInicial, registrarSalid
                                                     contenedorRef={contenedorRef} pan={pan} scale={scale} />
                                             )}
                                             {via.intermedios.map((p, pIdx) => (
-                                                <PuntoEditable key={pIdx} x={p.x * xRatio} y={p.y * yRatio} color="#f39c12"
+                                                <PuntoEditable key={pIdx} x={p.x * xRatio} y={p.y * yRatio} color={p.reunion ? COLOR_REUNION : '#f39c12'}
                                                     onMove={(x, y) => moverPuntoVia(idx, 'intermedio', pIdx, x / xRatio, y / yRatio)}
                                                     onDelete={() => eliminarPuntoVia(idx, 'intermedio', pIdx)}
                                                     contenedorRef={contenedorRef} pan={pan} scale={scale} />
@@ -1533,6 +1556,7 @@ export default function CroquisEscalada({ onExit, croquisInicial, registrarSalid
                         {creando && (
                             <g>
                                 <path d={generarCurvaSuave(puntosViaActual.map(p => ({ x: p.x * xRatio, y: p.y * yRatio })))} fill="none" stroke={viaActual.color} strokeWidth={viaActual.grosor || 4} strokeDasharray="8,8" />
+                                <MarcasReunion via={viaActual} xRatio={xRatio} yRatio={yRatio} />
                                 {viaActual.textos.map((txt, tIdx) => {
                                     const stxt = { ...txt, x: txt.x * xRatio, y: txt.y * yRatio };
                                     return (
@@ -1561,10 +1585,10 @@ export default function CroquisEscalada({ onExit, croquisInicial, registrarSalid
                                         contenedorRef={contenedorRef} pan={pan} scale={scale} />
                                 )}
                                 {viaActual.intermedios.map((p, i) => (
-                                    <PuntoEditable key={i} x={p.x * xRatio} y={p.y * yRatio} color="#f39c12"
+                                    <PuntoEditable key={i} x={p.x * xRatio} y={p.y * yRatio} color={p.reunion ? COLOR_REUNION : '#f39c12'}
                                         onMove={(x, y) => setViaActual(prev => {
                                             const intermedios = [...prev.intermedios];
-                                            intermedios[i] = { x: x / xRatio, y: y / yRatio };
+                                            intermedios[i] = { ...intermedios[i], x: x / xRatio, y: y / yRatio };
                                             return { ...prev, intermedios };
                                         })}
                                         onDelete={() => setViaActual(prev => ({
@@ -1756,14 +1780,21 @@ export default function CroquisEscalada({ onExit, croquisInicial, registrarSalid
                                     lat={infoCroquis.lat}
                                     lng={infoCroquis.lng}
                                     onChange={(la, ln) => setInfoCroquis(p => ({ ...p, lat: la, lng: ln }))}
-                                    orientacion={infoCroquis.horarioSolAuto ? infoCroquis.orientacion : null}
-                                    inclinacion={infoCroquis.inclinacion}
+                                    paredes={infoCroquis.horarioSolAuto
+                                        ? (fotosSol.length > 0 ? fotosSol : [{ foto: null, idx: -1 }]).map(f => ({
+                                            ...paredDeFoto(f.foto, infoCroquis),
+                                            etiqueta: f.foto ? nombreFoto(f.foto, f.idx) : '',
+                                            activa: f.idx === fotoSolIdx,
+                                        }))
+                                        : null}
                                 />
                                 <label style={{ ...st.label, marginTop: 12 }}>Enlace Google Maps (opcional, para compartir)</label>
                                 <input value={infoCroquis.mapsUrl} onChange={e => setInfoCroquis(p => ({ ...p, mapsUrl: e.target.value }))}
                                     placeholder="https://maps.app.goo.gl/..." style={st.input} />
                             </div>
                             <SolSombraSector info={infoCroquis} onChange={campos => setInfoCroquis(p => ({ ...p, ...campos }))}
+                                fotos={fotosSol} seleccion={fotoSolIdx} onSeleccion={setFotoSol}
+                                onCambiarFoto={(idx, campos) => setFotos(fs => fs.map((f, i) => i === idx ? { ...f, ...campos } : f))}
                                 inputStyle={st.input} labelStyle={st.label} />
                             <div style={{ marginBottom: 15 }}>
                                 <label style={st.label}>Itinerario hasta el sector</label>
@@ -1812,13 +1843,16 @@ export default function CroquisEscalada({ onExit, croquisInicial, registrarSalid
                         <div style={st.modalBody}>
                             <InputModal label="Nombre *" value={viaActual.info.nombre} onChange={v => setViaActual(p => ({ ...p, info: { ...p.info, nombre: v } }))} ph="Ej: La Vía Láctea" />
                             <div style={{ marginBottom: 15 }}>
-                                <label style={st.label}>Grado propuesto</label>
+                                <label style={st.label}>{reunionesOrdenadas(viaActual).length ? 'Grado de la vía (último largo)' : 'Grado propuesto'}</label>
                                 <GradeSelector value={viaActual.info.grado} onChange={v => setViaActual(p => ({
                                     ...p,
                                     info: { ...p.info, grado: v },
                                     textos: p.textos.map(t => t.type === 'grado' ? { ...t, text: v } : t)
                                 }))} />
                             </div>
+                            <EditorLargos via={viaActual}
+                                onGrado={(pIdx, g) => setViaActual(p => ({ ...p, intermedios: p.intermedios.map((q, i) => i === pIdx ? { ...q, grado: g } : q) }))}
+                                onQuitar={pIdx => setViaActual(p => ({ ...p, intermedios: p.intermedios.filter((_, i) => i !== pIdx) }))} />
                             <InputModal label="Número en la pared" value={viaActual.info.numero} onChange={v => setViaActual(p => ({ ...p, info: { ...p.info, numero: v } }))} ph="Ej: 7a (deja vacío para numeración automática)" />
                             <div style={{ marginBottom: 15 }}>
                                 <label style={st.label}>Equipador/a</label>
@@ -1852,6 +1886,7 @@ export default function CroquisEscalada({ onExit, croquisInicial, registrarSalid
                             <p><strong>Grado:</strong> <span style={{ color: '#e74c3c', fontWeight: 'bold' }}>{viaVisualizando.info.grado || 'No especificado'}</span></p>
                             <p><strong>Equipador:</strong> {viaVisualizando.info.equipador || 'Desconocido'}</p>
                             <p><strong>Año:</strong> {viaVisualizando.info.anio || '-'}</p>
+                            <LargosVia via={viaVisualizando} />
                             <div style={{ background: '#f8f9fa', padding: 15, borderRadius: 10, marginTop: 15, border: '1px solid #ecf0f1' }}>
                                 <strong style={{ color: '#7f8c8d' }}>Información técnica:</strong>
                                 <p style={{ margin: '10px 0 0', whiteSpace: 'pre-wrap' }}>{viaVisualizando.info.info || 'Sin información adicional.'}</p>
@@ -1860,6 +1895,38 @@ export default function CroquisEscalada({ onExit, croquisInicial, registrarSalid
                     </div>
                 </div>
             )}
+
+            {/* MODAL: Grado del largo que acaba en la reunión recién puesta */}
+            {gradoReunion && (() => {
+                const via = gradoReunion.viaIdx === null ? viaActual : vias[gradoReunion.viaIdx];
+                const n = via ? reunionesOrdenadas(via).findIndex(r => r.idx === gradoReunion.pIdx) + 1 : 0;
+                const cerrar = (grado) => {
+                    const poner = v => ({ ...v, intermedios: v.intermedios.map((q, i) => i === gradoReunion.pIdx ? { ...q, grado } : q) });
+                    if (gradoReunion.viaIdx === null) setViaActual(poner);
+                    else setVias(prev => prev.map((v, i) => i === gradoReunion.viaIdx ? poner(v) : v));
+                    setGradoReunion(null);
+                };
+                return (
+                    <div style={st.overlayModal}>
+                        <div style={{ ...st.modal, maxWidth: 420 }}>
+                            <div style={st.modalHeader}>
+                                <h3>Reunión {n || ''}</h3>
+                                <button onClick={() => setGradoReunion(null)} style={st.btnClose}><X size={20} /></button>
+                            </div>
+                            <div style={st.modalBody}>
+                                <p style={{ marginTop: 0, color: '#7f8c8d', fontSize: '0.88rem' }}>
+                                    Grado del largo {n || ''} (hasta esta reunión), si lo sabes. El último largo, hasta el final, lleva el grado de la vía.
+                                </p>
+                                <GradeSelector value={gradoReunion.grado} onChange={g => setGradoReunion(r => ({ ...r, grado: g }))} />
+                                <div style={{ display: 'flex', gap: 8, marginTop: 15 }}>
+                                    <button onClick={() => cerrar('')} style={{ flex: 1, padding: '10px 20px', background: 'white', color: '#2c3e50', border: '1px solid #bdc3c7', borderRadius: 8, fontWeight: 'bold', cursor: 'pointer' }}>Sin grado</button>
+                                    <button onClick={() => cerrar(gradoReunion.grado)} style={{ ...st.btnPrimario, flex: 1, justifyContent: 'center' }}>Aceptar</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                );
+            })()}
 
             {/* MODAL: Selección de grado (herramienta GRADO) */}
             {modalGradoPos && (
@@ -1982,7 +2049,7 @@ export default function CroquisEscalada({ onExit, croquisInicial, registrarSalid
                                 onChange={v => setVias(prev => { const c = [...prev]; c[editandoInfoViaIdx] = { ...c[editandoInfoViaIdx], info: { ...c[editandoInfoViaIdx].info, nombre: v } }; return c; })}
                                 ph="Ej: La Vía Láctea" />
                             <div style={{ marginBottom: 15 }}>
-                                <label style={st.label}>Grado</label>
+                                <label style={st.label}>{reunionesOrdenadas(vias[editandoInfoViaIdx]).length ? 'Grado de la vía (último largo)' : 'Grado'}</label>
                                 <GradeSelector
                                     value={vias[editandoInfoViaIdx].info?.grado || ''}
                                     onChange={v => setVias(prev => {
@@ -1996,6 +2063,9 @@ export default function CroquisEscalada({ onExit, croquisInicial, registrarSalid
                                     })}
                                 />
                             </div>
+                            <EditorLargos via={vias[editandoInfoViaIdx]}
+                                onGrado={(pIdx, g) => setVias(prev => { const c = [...prev]; const v = c[editandoInfoViaIdx]; c[editandoInfoViaIdx] = { ...v, intermedios: v.intermedios.map((q, i) => i === pIdx ? { ...q, grado: g } : q) }; return c; })}
+                                onQuitar={pIdx => setVias(prev => { const c = [...prev]; const v = c[editandoInfoViaIdx]; c[editandoInfoViaIdx] = { ...v, intermedios: v.intermedios.filter((_, i) => i !== pIdx) }; return c; })} />
                             <InputModal label="Número en la pared"
                                 value={vias[editandoInfoViaIdx].info?.numero || ''}
                                 onChange={v => setVias(prev => { const c = [...prev]; c[editandoInfoViaIdx] = { ...c[editandoInfoViaIdx], info: { ...c[editandoInfoViaIdx].info, numero: v } }; return c; })}
@@ -2311,6 +2381,35 @@ function AutocompleteInput({ label, value, onChange, ph, opciones }) {
     );
 }
 
+const COLOR_REUNION = '#16a085';
+
+// Grado de cada largo que acaba en una reunión intermedia; el último va con el grado de la vía
+function EditorLargos({ via, onGrado, onQuitar }) {
+    const reuniones = reunionesOrdenadas(via);
+    if (!reuniones.length) return null;
+    return (
+        <div style={{ marginBottom: 15, padding: 12, borderRadius: 10, background: '#e8f8f5', border: '1px solid #a3e4d7' }}>
+            <label style={{ ...st.label, color: COLOR_REUNION }}>Largos ({reuniones.length + 1})</label>
+            <p style={{ margin: '0 0 10px', fontSize: '0.78rem', color: '#7f8c8d' }}>
+                Grado de cada largo hasta su reunión. Aparecen como observaciones; el último largo da el grado de la vía.
+            </p>
+            {reuniones.map((r, i) => (
+                <div key={r.idx} style={{ marginBottom: 10 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+                        <strong style={{ fontSize: '0.85rem' }}>L{i + 1} · hasta la reunión R{i + 1}</strong>
+                        <button type="button" onClick={() => onQuitar(r.idx)} title="Quitar esta reunión"
+                            style={{ background: 'none', border: 'none', color: '#e74c3c', cursor: 'pointer', fontSize: '0.78rem' }}>Quitar</button>
+                    </div>
+                    <GradeSelector value={r.grado || ''} onChange={g => onGrado(r.idx, g)} />
+                </div>
+            ))}
+            <div style={{ fontSize: '0.85rem' }}>
+                <strong>L{reuniones.length + 1} · hasta el final:</strong> {via.info?.grado || 'sin grado'} <span style={{ color: '#7f8c8d' }}>(grado de la vía)</span>
+            </div>
+        </div>
+    );
+}
+
 const ToolBtn = ({ h, act, set, icon, text, color }) => (
     <button onClick={() => set(h)} style={{
         display: 'flex', alignItems: 'center', gap: 5, padding: '8px 12px', borderRadius: 8,
@@ -2443,9 +2542,10 @@ const st = {
     th: { padding: '10px 12px', borderBottom: '2px solid #bdc3c7' },
     td: { padding: '10px 12px' },
     overlayModal: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: 20 },
-    modal: { background: 'white', width: '100%', maxWidth: 500, borderRadius: 15, overflow: 'hidden', boxShadow: '0 20px 50px rgba(0,0,0,0.3)' },
-    modalHeader: { background: '#f8f9fa', padding: '15px 20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #ecf0f1' },
-    modalBody: { padding: 25 },
+    // Altura máxima de la pantalla: el contenido se desplaza y el botón Guardar siempre es alcanzable
+    modal: { background: 'white', width: '100%', maxWidth: 500, maxHeight: 'calc(100dvh - 40px)', display: 'flex', flexDirection: 'column', borderRadius: 15, overflow: 'hidden', boxShadow: '0 20px 50px rgba(0,0,0,0.3)' },
+    modalHeader: { background: '#f8f9fa', padding: '15px 20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #ecf0f1', flexShrink: 0 },
+    modalBody: { padding: 25, overflowY: 'auto', WebkitOverflowScrolling: 'touch', minHeight: 0 },
     btnClose: { background: 'none', border: 'none', color: '#7f8c8d', cursor: 'pointer' },
     label: { display: 'block', fontWeight: 'bold', color: '#34495e', marginBottom: 5, fontSize: '0.9rem' },
     input: { width: '100%', padding: 12, borderRadius: 8, border: '2px solid #bdc3c7', boxSizing: 'border-box', fontSize: '1rem', outline: 'none' },

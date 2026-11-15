@@ -15,7 +15,7 @@ service cloud.firestore {
         && (request.auth.uid in resource.data.get('editores', [])
             || request.auth.token.email in resource.data.get('editoresEmail', []))
         && request.resource.data.diff(resource.data).affectedKeys()
-             .hasOnly(['infoCroquis', 'fotos', 'imagenUrl', 'vias', 'formas', 'visibilidad', 'updatedAt']);
+             .hasOnly(['infoCroquis', 'fotos', 'imagenUrl', 'vias', 'formas', 'visibilidad', 'abiertoPropuestas', 'updatedAt']);
 
       // Proponer cambios al autor: solo añadir una capa
       allow update: if request.auth != null
@@ -88,6 +88,16 @@ service cloud.firestore {
         && request.resource.data.cambios.size() > 0 && request.resource.data.cambios.size() <= 100
         && tarjeta().croquisId == request.resource.data.croquisId
         && tarjeta().creadoPor == request.resource.data.paraUid;
+      // Croquis abierto a propuestas: cualquiera, sin enlace, dirigida al autor del croquis
+      allow create: if request.resource.data.keys().hasOnly(['croquisId', 'paraUid', 'autorNombre', 'cambios', 'estado', 'createdAt'])
+        && request.resource.data.estado == 'pendiente'
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.autorNombre is string
+        && request.resource.data.autorNombre.size() > 0 && request.resource.data.autorNombre.size() <= 60
+        && request.resource.data.cambios is list
+        && request.resource.data.cambios.size() > 0 && request.resource.data.cambios.size() <= 100
+        && get(/databases/$(database)/documents/croquis_escalada/$(request.resource.data.croquisId)).data.get('abiertoPropuestas', false) == true
+        && get(/databases/$(database)/documents/croquis_escalada/$(request.resource.data.croquisId)).data.creadoPor == request.resource.data.paraUid;
       allow read, delete: if request.auth != null && resource.data.paraUid == request.auth.uid;
       allow update: if request.auth != null && resource.data.paraUid == request.auth.uid
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['estado']);

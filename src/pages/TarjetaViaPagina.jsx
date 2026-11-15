@@ -140,7 +140,7 @@ export function FormularioVia({ foto, otrasVias, color, valor, onChange }) {
     const mover = (ref, p) => {
         if (ref.tipo === 'inicio') cambiar({ inicio: p });
         else if (ref.tipo === 'fin') cambiar({ fin: p });
-        else cambiar({ intermedios: valor.intermedios.map((q, i) => i === ref.i ? p : q) });
+        else cambiar({ intermedios: valor.intermedios.map((q, i) => i === ref.i ? { ...q, ...p } : q) });
     };
 
     const quitarPunto = () => {

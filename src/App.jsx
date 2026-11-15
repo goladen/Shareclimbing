@@ -39,6 +39,8 @@ function leerHash() {
     if (mv) return { tipo: 'via', token: mv[1] };
     const ms = hash.match(/^#\/sugerir\/(.+)$/);
     if (ms) return { tipo: 'sugerir', token: ms[1] };
+    const mp = hash.match(/^#\/proponer\/([^/]+)(?:\/via\/(.+))?$/);
+    if (mp) return { tipo: 'proponer', id: mp[1], via: mp[2] || null };
     const mr = hash.match(/^#\/rocodromo\/([^/]+)(?:\/bloque\/(.+))?$/);
     if (mr) return { tipo: 'rocodromo', id: mr[1], bloque: mr[2] || null };
     const me = hash.match(/^#\/escuela\/([^/]+)(?:\/sector\/(.+))?$/);
@@ -63,6 +65,7 @@ async function resolverHash() {
     if (enlace.tipo === 'equipador') return { name: 'equipador', id: enlace.id };
     if (enlace.tipo === 'via') return { name: 'tarjetaVia', token: enlace.token };
     if (enlace.tipo === 'sugerir') return { name: 'croquisCompartido', token: enlace.token };
+    if (enlace.tipo === 'proponer') return { name: 'croquisCompartido', croquisId: enlace.id, via: enlace.via };
     if (enlace.tipo === 'rocodromo') return { name: 'rocodromo', id: enlace.id, bloque: enlace.bloque };
     if (enlace.tipo === 'escuela') {
         return { name: 'escuela', id: enlace.id, sector: enlace.sector };
@@ -121,6 +124,15 @@ export default function App() {
         window.history.pushState(null, '', `${window.location.pathname}${ruta}`);
         setPantalla({ name: 'escuela', id, sector });
     };
+    // Croquis abierto a propuestas: cualquiera propone cambios, con o sin cuenta
+    const irAProponer = (croquisId, viaId = null) => {
+        window.history.pushState(null, '', `${window.location.pathname}#/proponer/${croquisId}${viaId != null ? `/via/${viaId}` : ''}`);
+        setPantalla({ name: 'croquisCompartido', croquisId, via: viaId });
+    };
+    const volverAlCroquis = (croquisId) => {
+        window.history.pushState(null, '', `${window.location.pathname}#/croquis/${croquisId}`);
+        resolverHash().then(p => setPantalla(p));
+    };
     const irAPerfil = () => setPantalla({ name: 'profile' });
     // Itinerarios grabados con GPS: id = null → lista
     const irAGrabar = (id = null) => {
@@ -169,6 +181,7 @@ export default function App() {
                     onVolver={pantalla.volverA ? () => irAEscuela(pantalla.volverA.id, pantalla.volverA.sector) : () => irAHome()}
                     onEditar={(c) => irAEditor(c)}
                     onVerEquipador={irAEquipador}
+                    onProponer={irAProponer}
                 />
             )}
             {pantalla.name === 'juego' && (
@@ -181,7 +194,9 @@ export default function App() {
                 <TarjetaViaPagina key={pantalla.token} token={pantalla.token} onSalir={() => irAHome()} />
             )}
             {pantalla.name === 'croquisCompartido' && (
-                <CroquisCompartidoPagina key={pantalla.token} token={pantalla.token} onSalir={() => irAHome()} />
+                <CroquisCompartidoPagina key={pantalla.token || `${pantalla.croquisId}/${pantalla.via || ''}`}
+                    token={pantalla.token} croquisId={pantalla.croquisId} viaInicial={pantalla.via}
+                    onSalir={pantalla.croquisId ? () => volverAlCroquis(pantalla.croquisId) : () => irAHome()} />
             )}
             {pantalla.name === 'rocodromo' && (
                 <RocodromoPagina key={`${pantalla.id}/${pantalla.bloque || ''}`} rocodromoId={pantalla.id} bloqueInicial={pantalla.bloque} onVolver={() => irAHome('rocodromos')} />

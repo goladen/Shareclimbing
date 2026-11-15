@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { X, Download, Printer, Move, List } from 'lucide-react';
 import { ControlesListaVias, agruparVias, useConfigListaVias } from './ConfigListaVias';
+import { dibujarReunionesCanvas } from '../utils/reuniones';
 
 // ─── Helpers de canvas ───────────────────────────────────────────────────────
 
@@ -113,6 +114,7 @@ function dibujarVias(ctx, viasOrdenadas, numeroInicial, xR, yR) {
                 ctx.fillText(txt.text, tx, ty);
             }
         });
+        dibujarReunionesCanvas(ctx, via, xR, yR);
     });
 }
 

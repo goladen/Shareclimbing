@@ -11,6 +11,7 @@ import { DesvincularCroquisModal } from '../components/AsociacionEscuela';
 import { EquipadorYColaboradores } from '../components/EquipadorInput';
 import { textoRegion } from '../utils/regiones';
 import { ListaReferencias } from '../components/Referencias';
+import { LargosVia } from '../utils/reuniones';
 import { normalizarNombre as normalizar, nombreCroquis } from '../utils/escuelas';
 
 const POSICIONES_VIAS = [
@@ -405,6 +406,7 @@ export default function EscuelaPagina({ escuelaId, sector, onVolver, onVerSector
                             <p><strong>Grado:</strong> <span style={{ color: '#e74c3c', fontWeight: 'bold', fontSize: '1.1rem' }}>{viaSeleccionada.info?.grado || '–'}</span></p>
                             <EquipadorYColaboradores info={viaSeleccionada.info} onVerEquipador={onVerEquipador} />
                             <p><strong>Año:</strong> {viaSeleccionada.info?.anio || '–'}</p>
+                            <LargosVia via={viaSeleccionada} />
                             {viaSeleccionada.info?.info && <p style={{ whiteSpace: 'pre-wrap', marginTop: 8 }}>{viaSeleccionada.info.info}</p>}
                         </div>
                     </div>
@@ -614,7 +616,7 @@ const st = {
     btnEnlace: { background: 'none', border: 'none', color: '#3498db', fontWeight: 'bold', cursor: 'pointer', fontSize: '0.8em', padding: 0 },
     filaVia: { display: 'flex', alignItems: 'center', gap: 8, width: '100%', padding: '6px 4px', background: 'none', border: 'none', borderBottom: '1px solid #ecf0f1', color: '#2c3e50', fontSize: '0.92em', cursor: 'pointer' },
     overlay: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 2000, padding: 20 },
-    modal: { background: 'white', width: '100%', maxWidth: 460, borderRadius: 14, overflow: 'hidden', boxShadow: '0 20px 50px rgba(0,0,0,0.3)' },
+    modal: { background: 'white', width: '100%', maxWidth: 460, maxHeight: 'calc(100dvh - 40px)', overflowY: 'auto', borderRadius: 14, boxShadow: '0 20px 50px rgba(0,0,0,0.3)' },
     modalHeader: { background: '#f8f9fa', padding: '15px 20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #ecf0f1' },
     btnClose: { background: 'none', border: 'none', color: '#7f8c8d', cursor: 'pointer' },
 };

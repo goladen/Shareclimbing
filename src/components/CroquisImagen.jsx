@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
+import { MarcasReunion } from '../utils/reuniones';
 
 export const generarCurvaSuave = (puntos) => {
     if (puntos.length === 0) return "";
@@ -55,6 +56,7 @@ export default function CroquisImagen({ foto, onClickVia }) {
                 {(via.textos || []).map((txt, i) => (
                     <TextoSvg key={i} txt={{ ...txt, x: txt.x * xRatio, y: txt.y * yRatio }} color={via.color} fPantalla={fPantalla} escala={xRatio} />
                 ))}
+                {!discontinua && <MarcasReunion via={via} xRatio={xRatio} yRatio={yRatio} f={f} />}
                 {via.inicio && (
                     <>
                         <circle cx={ix} cy={iy + 14 * f} r={11 * f} fill={via.color} stroke="white" strokeWidth={f} />

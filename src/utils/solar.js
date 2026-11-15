@@ -93,3 +93,40 @@ export const textoInclinacion = (deg) => {
     if (deg < 90) return `Placa (${90 - deg}°)`;
     return `Desplome (${deg - 90}°)`;
 };
+
+// --- Varias paredes en un sector: cada foto puede tener su orientación e inclinación ---
+
+export const ORIENTACION_INICIAL = 180;
+export const INCLINACION_INICIAL = 90;
+
+// Orientación e inclinación de la pared de una foto; si la foto no tiene, las del sector
+export const paredDeFoto = (foto, info) => ({
+    orientacion: Number.isFinite(foto?.orientacion) ? foto.orientacion
+        : Number.isFinite(info?.orientacion) ? info.orientacion : ORIENTACION_INICIAL,
+    inclinacion: Number.isFinite(foto?.inclinacion) ? foto.inclinacion
+        : Number.isFinite(info?.inclinacion) ? info.inclinacion : INCLINACION_INICIAL,
+});
+
+export const ubicacionSol = (info) => {
+    const lat = parseFloat(info?.lat);
+    const lng = parseFloat(info?.lng);
+    return Number.isFinite(lat) ? { lat, lng: Number.isFinite(lng) ? lng : undefined } : null;
+};
+
+export const nombreFoto = (foto, i) => foto?.nombre || `Foto ${i + 1}`;
+
+// Horario de una foto con la vinculación automática, o null si falta la ubicación
+export const horarioDeFoto = (foto, info) => {
+    const ub = ubicacionSol(info);
+    return ub ? resumenSol({ ...ub, ...paredDeFoto(foto, info) }) : null;
+};
+
+// Texto del sector: uno solo si todas las paredes coinciden, si no uno por foto
+export function resumenSector(info, fotos) {
+    const ub = ubicacionSol(info);
+    if (!ub) return null;
+    const lista = fotos.length > 0 ? fotos : [null];
+    const textos = lista.map((f, i) => ({ nombre: nombreFoto(f, i), texto: resumenSol({ ...ub, ...paredDeFoto(f, info) }) }));
+    if (textos.every(t => t.texto === textos[0].texto)) return textos[0].texto;
+    return textos.map(t => `${t.nombre}: ${t.texto}`).join(' | ');
+}

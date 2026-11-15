@@ -10,11 +10,12 @@ import { usePinchZoom } from '../utils/pinchZoom';
 import { ItinerarioVista } from '../components/ItinerarioMapa';
 import { AsociarEscuelaModal } from '../components/AsociacionEscuela';
 import CompartirViaModal from '../components/CompartirViaModal';
-import { cardinal, textoInclinacion } from '../utils/solar';
+import { cardinal, textoInclinacion, paredDeFoto, horarioDeFoto, nombreFoto, ubicacionSol } from '../utils/solar';
 import { EquipadorYColaboradores } from '../components/EquipadorInput';
 import { textoRegion } from '../utils/regiones';
 import { ListaReferencias } from '../components/Referencias';
 import { ControlesListaVias, agruparVias, useConfigListaVias } from '../components/ConfigListaVias';
+import { MarcasReunion, LargosVia } from '../utils/reuniones';
 
 const generarCurvaSuave = (puntos) => {
     if (puntos.length === 0) return "";
@@ -35,7 +36,7 @@ const generarCurvaSuave = (puntos) => {
     return path;
 };
 
-export default function CroquisViewer({ croquis: croquisProp, onVolver, onEditar, onVerEquipador }) {
+export default function CroquisViewer({ croquis: croquisProp, onVolver, onEditar, onVerEquipador, onProponer }) {
     const { usuario } = useAuth();
 
     // Copia local para reflejar cambios de editores sin recargar
@@ -112,6 +113,8 @@ export default function CroquisViewer({ croquis: croquisProp, onVolver, onEditar
             try {
                 const q = query(
                     collection(db, 'solicitudes_edicion'),
+                    // Las reglas solo dejan leer las solicitudes propias: el filtro tiene que estar en la consulta
+                    where('autorUid', '==', usuario.uid),
                     where('croquisId', '==', croquis.id),
                     where('estado', '==', 'pendiente')
                 );
@@ -353,6 +356,14 @@ export default function CroquisViewer({ croquis: croquisProp, onVolver, onEditar
                         </button>
                     )}
 
+                    {/* Croquis abierto a propuestas: cualquiera, con o sin cuenta */}
+                    {!puedeEditar && croquis.abiertoPropuestas && onProponer && (
+                        <button onClick={() => onProponer(croquis.id)} style={{ ...st.btnIcono, background: 'rgba(243,156,18,0.55)' }} title="Proponer cambios en las vías, sin necesidad de registrarse">
+                            <MessageSquarePlus size={18} />
+                            <span style={{ color: 'white', fontSize: '0.8rem', marginLeft: 4 }}>Proponer cambios</span>
+                        </button>
+                    )}
+
                     {/* Logueado, sin permiso: solicitar edición */}
                     {usuario && !puedeEditar && !solicitudEnviada && (
                         <button onClick={() => setModalSolicitud(true)} style={{ ...st.btnIcono, background: 'rgba(155,89,182,0.45)' }} title="Solicitar permiso de edición">
@@ -415,6 +426,7 @@ export default function CroquisViewer({ croquis: croquisProp, onVolver, onEditar
                                     {(via.textos || []).map((txt, i) => (
                                         <TextoSvg key={i} txt={{ ...txt, x: txt.x * xRatio, y: txt.y * yRatio }} color={via.color} />
                                     ))}
+                                    <MarcasReunion via={via} xRatio={xRatio} yRatio={yRatio} />
                                     {via.inicio && (
                                         <>
                                             <circle cx={ix} cy={iy + 20} r="15" fill={via.color} />
@@ -497,7 +509,8 @@ export default function CroquisViewer({ croquis: croquisProp, onVolver, onEditar
             )}
 
             {compartiendoCroquis && (
-                <CompartirViaModal croquisId={croquis.id} onClose={() => setCompartiendoCroquis(false)} />
+                <CompartirViaModal croquisId={croquis.id} onClose={() => setCompartiendoCroquis(false)}
+                    onAbiertoCambiado={v => setCroquis(prev => ({ ...prev, abiertoPropuestas: v }))} />
             )}
             {viaCompartiendo && (
                 <CompartirViaModal croquisId={croquis.id} via={viaCompartiendo} onClose={() => setViaCompartiendo(null)} />
@@ -657,10 +670,18 @@ export default function CroquisViewer({ croquis: croquisProp, onVolver, onEditar
                         <div style={{ ...st.modalBody, maxHeight: '78vh', overflowY: 'auto' }}>
                             {info.escuela && <p><strong>Escuela:</strong> {info.escuela}</p>}
                             {textoRegion(info) && <p><MapPin size={14} style={{ marginRight: 6 }} />{textoRegion(info)}</p>}
-                            {info.horarioSol && <p><Sun size={14} style={{ marginRight: 6 }} />{info.horarioSol}</p>}
-                            {info.horarioSolAuto && Number.isFinite(info.orientacion) && (
-                                <p style={{ fontSize: '0.9rem' }}><strong>Pared:</strong> mira al {cardinal(info.orientacion)} ({info.orientacion}°) · {textoInclinacion(info.inclinacion ?? 90)}</p>
-                            )}
+                            {/* Con la vinculación automática, el horario de la pared de la foto que se está viendo */}
+                            {info.horarioSolAuto && ubicacionSol(info) ? (() => {
+                                const pared = paredDeFoto(fotoActual, info);
+                                return (
+                                    <>
+                                        <p><Sun size={14} style={{ marginRight: 6 }} />{horarioDeFoto(fotoActual, info)}</p>
+                                        <p style={{ fontSize: '0.9rem' }}>
+                                            <strong>Pared{fotos.length > 1 ? ` (${nombreFoto(fotoActual, fotoIdx)})` : ''}:</strong> mira al {cardinal(pared.orientacion)} ({pared.orientacion}°) · {textoInclinacion(pared.inclinacion)}
+                                        </p>
+                                    </>
+                                );
+                            })() : info.horarioSol && <p><Sun size={14} style={{ marginRight: 6 }} />{info.horarioSol}</p>}
                             {info.mejorEpoca && <p><Calendar size={14} style={{ marginRight: 6 }} />{info.mejorEpoca}</p>}
                             {info.acceso && <div style={st.bloque}><strong>Acceso:</strong><p>{info.acceso}</p></div>}
                             {info.restricciones && <div style={{ ...st.bloque, background: '#fef9e7', border: '1px solid #f9ca24' }}><AlertTriangle size={14} /> <strong>Restricciones:</strong><p>{info.restricciones}</p></div>}
@@ -729,6 +750,7 @@ export default function CroquisViewer({ croquis: croquisProp, onVolver, onEditar
                             <p><strong>Grado:</strong> <span style={{ color: '#e74c3c', fontWeight: 'bold', fontSize: '1.1rem' }}>{viaSeleccionada.info?.grado || '–'}</span></p>
                             <EquipadorYColaboradores info={viaSeleccionada.info} onVerEquipador={onVerEquipador} />
                             <p><strong>Año:</strong> {viaSeleccionada.info?.anio || '–'}</p>
+                            {!viaSeleccionada.esCombi && <LargosVia via={viaSeleccionada} />}
                             {viaSeleccionada.info?.info && (
                                 <div style={st.bloque}><strong>Info técnica:</strong><p style={{ whiteSpace: 'pre-wrap' }}>{viaSeleccionada.info.info}</p></div>
                             )}
@@ -736,6 +758,12 @@ export default function CroquisViewer({ croquis: croquisProp, onVolver, onEditar
                                 <button onClick={() => setViaCompartiendo(viaSeleccionada)}
                                     style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, width: '100%', marginTop: 14, padding: 10, background: '#3498db', color: 'white', border: 'none', borderRadius: 8, fontWeight: 'bold', cursor: 'pointer' }}>
                                     <Share2 size={16} /> Compartir tarjeta de la vía
+                                </button>
+                            )}
+                            {!puedeEditar && croquis.abiertoPropuestas && onProponer && !viaSeleccionada.esCombi && (
+                                <button onClick={() => onProponer(croquis.id, viaSeleccionada.id)}
+                                    style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, width: '100%', marginTop: 14, padding: 10, background: '#f39c12', color: 'white', border: 'none', borderRadius: 8, fontWeight: 'bold', cursor: 'pointer' }}>
+                                    <MessageSquarePlus size={16} /> Proponer cambios en esta vía
                                 </button>
                             )}
                         </div>
@@ -773,7 +801,7 @@ const st = {
     leyendaNombre: { color: 'white', fontSize: '0.82rem', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
     leyendaGrado: { color: '#e74c3c', fontSize: '0.78rem', fontWeight: 'bold', background: 'rgba(231,76,60,0.2)', padding: '1px 5px', borderRadius: 4 },
     overlay: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: 20 },
-    modal: { background: 'white', width: '100%', maxWidth: 480, borderRadius: 14, overflow: 'hidden', boxShadow: '0 20px 50px rgba(0,0,0,0.3)' },
+    modal: { background: 'white', width: '100%', maxWidth: 480, maxHeight: 'calc(100dvh - 40px)', overflowY: 'auto', borderRadius: 14, boxShadow: '0 20px 50px rgba(0,0,0,0.3)' },
     modalHeader: { background: '#f8f9fa', padding: '15px 20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #ecf0f1' },
     modalBody: { padding: 20 },
     btnClose: { background: 'none', border: 'none', color: '#7f8c8d', cursor: 'pointer' },
