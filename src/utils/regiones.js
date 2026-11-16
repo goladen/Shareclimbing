@@ -20,3 +20,26 @@ export const REGIONES = {
 export const PAISES = Object.keys(REGIONES);
 
 export const textoRegion = ({ pais, comunidad } = {}) => [comunidad, pais].filter(Boolean).join(', ');
+
+// Provincias de España por comunidad autónoma
+export const PROVINCIAS_ES = {
+    'Andalucía': ['Almería', 'Cádiz', 'Córdoba', 'Granada', 'Huelva', 'Jaén', 'Málaga', 'Sevilla'],
+    'Aragón': ['Huesca', 'Teruel', 'Zaragoza'],
+    'Asturias': ['Asturias'],
+    'Illes Balears': ['Illes Balears'],
+    'Canarias': ['Las Palmas', 'Santa Cruz de Tenerife'],
+    'Cantabria': ['Cantabria'],
+    'Castilla-La Mancha': ['Albacete', 'Ciudad Real', 'Cuenca', 'Guadalajara', 'Toledo'],
+    'Castilla y León': ['Ávila', 'Burgos', 'León', 'Palencia', 'Salamanca', 'Segovia', 'Soria', 'Valladolid', 'Zamora'],
+    'Cataluña': ['Barcelona', 'Girona', 'Lleida', 'Tarragona'],
+    'Comunitat Valenciana': ['Alicante', 'Castellón', 'Valencia'],
+    'Extremadura': ['Badajoz', 'Cáceres'],
+    'Galicia': ['A Coruña', 'Lugo', 'Ourense', 'Pontevedra'],
+    'La Rioja': ['La Rioja'],
+    'Comunidad de Madrid': ['Madrid'],
+    'Región de Murcia': ['Murcia'],
+    'Comunidad Foral de Navarra': ['Navarra'],
+    'País Vasco': ['Álava', 'Gipuzkoa', 'Bizkaia'],
+    'Ceuta': ['Ceuta'],
+    'Melilla': ['Melilla'],
+};

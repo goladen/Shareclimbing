@@ -108,11 +108,11 @@ export function DesvincularCroquisModal({ croquisId, croquisNombre, escuela, onC
                 await addDoc(collection(db, 'notificaciones', croquis.creadoPor, 'items'), {
                     tipo: 'croquis_desvinculado',
                     croquisId,
-                    croquisNombre: nombreCroquis(croquis.infoCroquis),
+                    croquisNombre: nombreCroquis(croquis.infoCroquis).slice(0, 120),
                     escuelaId: escuela.id,
-                    escuelaNombre: escuela.nombre,
-                    autorNombre: usuario.displayName || usuario.email.split('@')[0],
-                    textoPreview: texto,
+                    escuelaNombre: (escuela.nombre || '').slice(0, 120),
+                    autorNombre: (usuario.displayName || usuario.email.split('@')[0]).slice(0, 80),
+                    textoPreview: texto.slice(0, 500),
                     leido: false,
                     createdAt: serverTimestamp(),
                 });

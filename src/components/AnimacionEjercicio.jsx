@@ -372,20 +372,6 @@ export function DetalleAgarre() {
     );
 }
 
-// Un paso concreto, sin animación (impresión y vista previa)
-export function PosturaEstatica({ guia, paso = 0, lastre = false, alto = 160 }) {
-    const anim = ANIMACIONES[ANIMACION_DE_GUIA[guia] || guia];
-    if (!anim) return null;
-    const p = anim.pasos[paso];
-    const pose = mezclar(P[p.p], P[p.p], 1);
-    return (
-        <svg viewBox={anim.vista} style={{ width: '100%', height: alto, display: 'block' }} role="img" aria-label={p.nota}>
-            <Escena tipo={anim.escena} pose={pose} polea={anim.polea} cinta={anim.cinta} lastre={lastre && guia === 'dominada'} />
-            <Figura pose={pose} color={p.error ? COLOR.error : COLOR.cuerpo} marca={p.marca} />
-        </svg>
-    );
-}
-export const pasosDe = (guia) => ANIMACIONES[ANIMACION_DE_GUIA[guia] || guia]?.pasos || [];
 
 // ───────────────────────────── Componente ─────────────────────────────
 

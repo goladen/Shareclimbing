@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { collection, query, where, onSnapshot, doc, updateDoc, deleteDoc, writeBatch, serverTimestamp } from 'firebase/firestore';
-import { ArrowLeft, Play, CheckCircle, SkipForward, AlertTriangle, RefreshCw, ClipboardList, TrendingUp, TrendingDown, Timer, Printer, MessageSquare, UserCheck, X, Trash2 } from 'lucide-react';
+import { Play, CheckCircle, SkipForward, AlertTriangle, RefreshCw, ClipboardList, TrendingUp, TrendingDown, Timer, Printer, MessageSquare, UserCheck, X, Trash2 } from 'lucide-react';
 import { db } from '../firebase';
 import CronoEjercicio from '../components/CronoEjercicio';
 import { GuiaDesplegable } from '../components/AnimacionEjercicio';

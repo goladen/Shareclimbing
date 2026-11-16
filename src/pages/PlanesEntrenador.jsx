@@ -3,7 +3,7 @@ import { collection, query, where, onSnapshot, doc, setDoc, updateDoc, deleteDoc
 import { Plus, Trash2, Save, Send, Users, MessageSquare, X, ChevronRight, Copy, RotateCcw, AlertTriangle } from 'lucide-react';
 import { db } from '../firebase';
 import { Tarjeta, Marco, Centro, Campo, st } from '../components/entrenamientoUI';
-import { TIPOS_SESION, COMPONENTES, ESTILOS_DEDOS, generarEstructura, aEjercicioCrono, textoCarga, sesionesHechas } from '../utils/entrenamiento';
+import { TIPOS_SESION, COMPONENTES, ESTILOS_DEDOS, generarEstructura, textoCarga, sesionesHechas } from '../utils/entrenamiento';
 import {
     COL_PLANES, COL_PLANTILLAS, COL_INVITACIONES, resumenPlantilla, cambiosDePlantilla, notificar, nombreDe, resumenAtleta,
 } from '../utils/entrenador';

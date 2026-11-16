@@ -1,10 +1,10 @@
+// Formulario de una vía (datos y trazado sobre la foto) para quien propone cambios en un
+// croquis, con o sin cuenta. Lo usa la página de propuestas.
 import React, { useState, useEffect, useRef } from 'react';
-import { Plus, Minus, Send, Trash2, MapPin, MousePointer2, CheckCircle } from 'lucide-react';
-import { addDoc, collection, doc, getDoc, serverTimestamp } from 'firebase/firestore';
-import { db } from '../firebase';
-import EquipadorInput from '../components/EquipadorInput';
+import { Plus, Minus, Trash2, MapPin, MousePointer2, CheckCircle } from 'lucide-react';
+import EquipadorInput from './EquipadorInput';
 import { GradeSelector } from '../CroquisEscalada';
-import { generarCurvaSuave } from '../components/CroquisImagen';
+import { generarCurvaSuave } from './CroquisImagen';
 
 const HERRAMIENTAS = [
     { id: 'inicio', label: 'Inicio', color: '#e74c3c', icon: <MapPin size={15} /> },
@@ -12,11 +12,7 @@ const HERRAMIENTAS = [
     { id: 'fin', label: 'Fin', color: '#2ecc71', icon: <CheckCircle size={15} /> },
 ];
 
-export const fotosDeDatos = (d) => d.fotos?.length > 0
-    ? d.fotos
-    : [{ id: 'f0', imagenUrl: d.imagenUrl, vias: d.vias || [], formas: d.formas || [] }];
-
-export const ordenarPuntos = (via) => {
+const ordenarPuntos = (via) => {
     const dir = via.inicio && via.fin ? via.fin.y - via.inicio.y : -1;
     const inter = [...(via.intermedios || [])].sort((a, b) => dir < 0 ? b.y - a.y : a.y - b.y);
     return [via.inicio, ...inter, via.fin].filter(Boolean);
@@ -196,96 +192,6 @@ export function FormularioVia({ foto, otrasVias, color, valor, onChange }) {
                 </>
             )}
         </>
-    );
-}
-
-export default function TarjetaViaPagina({ token, onSalir }) {
-    const [estado, setEstado] = useState('cargando'); // cargando | listo | invalida
-    const [tarjeta, setTarjeta] = useState(null);
-    const [contexto, setContexto] = useState(null); // { titulo, foto, otrasVias, color }
-    const [valor, setValor] = useState(null);
-    const [autorNombre, setAutorNombre] = useState('');
-    const [guardando, setGuardando] = useState(false);
-    const [mensaje, setMensaje] = useState(null); // { tipo: 'ok' | 'error', texto }
-
-    useEffect(() => {
-        (async () => {
-            try {
-                const snapTarjeta = await getDoc(doc(db, 'tarjetas_via', token));
-                if (!snapTarjeta.exists()) { setEstado('invalida'); return; }
-                const t = snapTarjeta.data();
-                const snap = await getDoc(doc(db, 'croquis_escalada', t.croquisId));
-                if (!snap.exists()) { setEstado('invalida'); return; }
-                const datos = snap.data();
-                const foto = fotosDeDatos(datos).find(f => (f.vias || []).some(v => v.id === t.viaId));
-                const via = foto?.vias.find(v => v.id === t.viaId);
-                if (!via) { setEstado('invalida'); return; }
-                setTarjeta(t);
-                setContexto({
-                    titulo: [datos.infoCroquis?.escuela, datos.infoCroquis?.sector].filter(Boolean).join(' · '),
-                    foto,
-                    otrasVias: foto.vias.filter(v => v.id !== t.viaId && v.inicio),
-                    color: via.color || '#e74c3c',
-                });
-                setValor(valorDeVia(via));
-                setEstado('listo');
-            } catch (e) {
-                console.error(e);
-                setEstado('invalida');
-            }
-        })();
-    }, [token]);
-
-    // Sin registro: la propuesta llega a quien compartió la tarjeta, que decide si se aplica
-    const enviar = async () => {
-        if (!autorNombre.trim()) { setMensaje({ tipo: 'error', texto: 'Escribe tu nombre para que sepan quién propone el cambio.' }); return; }
-        const conTrazado = Boolean(contexto.foto.imagenUrl);
-        const problema = errorDeValor(valor, conTrazado);
-        if (problema) { setMensaje({ tipo: 'error', texto: problema }); return; }
-        setGuardando(true);
-        setMensaje(null);
-        try {
-            await addDoc(collection(db, 'propuestas_via'), {
-                token,
-                croquisId: tarjeta.croquisId,
-                viaId: tarjeta.viaId,
-                paraUid: tarjeta.creadoPor,
-                autorNombre: autorNombre.trim().slice(0, 60),
-                cambios: cambiosDeValor(valor, conTrazado),
-                estado: 'pendiente',
-                createdAt: serverTimestamp(),
-            });
-            setMensaje({ tipo: 'ok', texto: 'Propuesta enviada. Se aplicará cuando la acepten.' });
-        } catch (e) {
-            setMensaje({ tipo: 'error', texto: 'No se pudo enviar: ' + e.message });
-        }
-        setGuardando(false);
-    };
-
-    if (estado === 'cargando') return <div style={st.pantallaMensaje}>Cargando…</div>;
-    if (estado === 'invalida') return <EnlaceNoDisponible onSalir={onSalir} />;
-
-    return (
-        <div style={st.app}>
-            <div style={st.topbar}>
-                <div style={{ minWidth: 0 }}>
-                    <div style={{ color: 'white', fontWeight: 'bold' }}>Tarjeta de vía</div>
-                    {contexto.titulo && <div style={{ color: 'rgba(255,255,255,0.6)', fontSize: '0.78rem', overflowWrap: 'anywhere' }}>{contexto.titulo}</div>}
-                </div>
-                <button onClick={enviar} disabled={guardando} style={st.btnGuardar}>
-                    <Send size={16} /> {guardando ? 'Enviando…' : 'Enviar propuesta'}
-                </button>
-            </div>
-            <div style={st.scroll}>
-                <div style={st.tarjeta}>
-                    {mensaje && <div style={mensaje.tipo === 'ok' ? st.ok : st.error}>{mensaje.texto}</div>}
-                    <CampoAutor valor={autorNombre} onChange={v => { setAutorNombre(v); setMensaje(null); }}
-                        texto="Tu propuesta llegará a quien compartió esta vía. Si la acepta, aparecerás como colaborador." />
-                    <FormularioVia foto={contexto.foto} otrasVias={contexto.otrasVias} color={contexto.color} valor={valor}
-                        onChange={v => { setValor(v); setMensaje(null); }} />
-                </div>
-            </div>
-        </div>
     );
 }
 

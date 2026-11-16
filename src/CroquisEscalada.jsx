@@ -9,14 +9,16 @@ import {
 import { MarcasReunion, LargosVia, reunionesOrdenadas } from './utils/reuniones';
 import ModalImpresion from './components/ModalImpresion';
 import ImportarIAModal from './components/ImportarIAModal';
+import ViaNombreInput from './components/ViaNombreInput';
+import { claveVia } from './utils/viasEquipador';
 import { db, auth } from './firebase';
-import { collection, doc, addDoc, updateDoc, getDocs, getDoc, serverTimestamp, arrayUnion } from 'firebase/firestore';
+import { collection, doc, addDoc, updateDoc, getDocs, serverTimestamp } from 'firebase/firestore';
 import { useAuth } from './contexts/AuthContext';
 import LocationPicker from './components/LocationPicker';
 import { ItinerarioEditor } from './components/ItinerarioMapa';
-import CompartirViaModal from './components/CompartirViaModal';
+import ColaborarModal from './components/ColaborarModal';
 import SolSombraSector from './components/SolSombraSector';
-import { paredDeFoto, nombreFoto } from './utils/solar';
+import { paredDeFoto, nombreFoto, resumenSector } from './utils/solar';
 import EquipadorInput from './components/EquipadorInput';
 import { resolverEquipadores } from './utils/equipadores';
 import { usePinchZoom } from './utils/pinchZoom';
@@ -77,8 +79,6 @@ export default function CroquisEscalada({ onExit, croquisInicial, registrarSalid
     // Valores derivados de la foto activa
     const foto = fotos[fotoIdx] || { imagenUrl: null, imagenEsArchivo: false, imagenFile: null, vias: [], formas: [] };
     const imagenUrl = foto.imagenUrl;
-    const imagenEsArchivo = foto.imagenEsArchivo;
-    const imagenFile = foto.imagenFile;
     const vias = foto.vias || [];
 
     // Setters que actualizan solo la foto activa
@@ -144,7 +144,6 @@ export default function CroquisEscalada({ onExit, croquisInicial, registrarSalid
     const [regionesEscuelas, setRegionesEscuelas] = useState({}); // nombre normalizado → { pais, comunidad }
     const escuelaGuardada = useRef(normalizarNombre(croquisInicial?.infoCroquis?.escuela));
     const [sectoresDisponibles, setSectoresDisponibles] = useState([]);
-    const [mapsEmbedUrl, setMapsEmbedUrl] = useState('');
     const [mostrarModalInfo, setMostrarModalInfo] = useState(false);
     const [viaVisualizando, setViaVisualizando] = useState(null);
     const [modalGradoPos, setModalGradoPos] = useState(null); // {x,y} al clicar con tool GRADO
@@ -274,11 +273,6 @@ export default function CroquisEscalada({ onExit, croquisInicial, registrarSalid
         } catch (_) {}
     };
 
-    useEffect(() => {
-        const timer = setTimeout(() => setMapsEmbedUrl(parsearUrlMaps(infoCroquis.mapsUrl)), 700);
-        return () => clearTimeout(timer);
-    }, [infoCroquis.mapsUrl]);
-
     // ─── CARGA DE IMAGEN ───
     const handleCargaArchivo = (e) => {
         const file = e.target.files[0];
@@ -400,8 +394,12 @@ export default function CroquisEscalada({ onExit, croquisInicial, registrarSalid
             }
             setProgresoSubida('');
 
+            // Con la vinculación automática, el horario se recalcula con las fotos que se guardan
+            // (puede haber cambiado una foto sin abrir el panel de sol y sombra)
+            const horarioAuto = infoCroquis.horarioSolAuto ? resumenSector(infoCroquis, fotasGuardadas) : null;
+            const infoBase = horarioAuto ? { ...infoCroquis, horarioSol: horarioAuto } : infoCroquis;
             const data = {
-                infoCroquis: infoCroquis.referencias ? { ...infoCroquis, referencias: limpiarReferencias(infoCroquis.referencias) } : infoCroquis,
+                infoCroquis: infoBase.referencias ? { ...infoBase, referencias: limpiarReferencias(infoBase.referencias) } : infoBase,
                 fotos: fotasGuardadas,
                 imagenUrl: fotasGuardadas[0]?.imagenUrl || null,
                 vias: fotasGuardadas[0]?.vias || [],
@@ -415,7 +413,6 @@ export default function CroquisEscalada({ onExit, croquisInicial, registrarSalid
                 await updateDoc(doc(db, 'croquis_escalada', croquísId.current), data);
             } else {
                 data.createdAt = serverTimestamp();
-                data.capas = [];
                 const docRef = await addDoc(collection(db, 'croquis_escalada'), data);
                 croquísId.current = docRef.id;
 
@@ -472,40 +469,20 @@ export default function CroquisEscalada({ onExit, croquisInicial, registrarSalid
         return false;
     };
 
-    // ─── FIREBASE: guardar como capa (croquis ajeno) ───
-    const guardarComoCapa = async () => {
-        if (!usuario) return;
-        setGuardando(true);
-        try {
-            const capa = {
-                vias: vias.map(v => ({
-                    id: v.id, inicio: v.inicio, fin: v.fin,
-                    intermedios: v.intermedios, textos: v.textos,
-                    info: v.info, color: v.color
-                })),
-                creadorId: usuario.uid,
-                creadorNombre: usuario.displayName || usuario.email,
-                estado: 'pendiente',
-                createdAt: new Date().toISOString()
-            };
-            await updateDoc(doc(db, 'croquis_escalada', croquísId.current), {
-                capas: arrayUnion(capa)
-            });
-            alert('Cambios enviados al propietario para su revisión.');
-        } catch (e) {
-            alert('Error: ' + e.message);
-        }
-        setGuardando(false);
-    };
-
     // ─── ACEPTAR / RECHAZAR CAPA ───
+    // Las capas son propuestas del sistema anterior, enviadas desde el editor. Ya no se crean
+    // (ahora se propone desde «Proponer cambios»), pero se pueden revisar las que quedan pendientes.
     const gestionarCapa = async (capaIdx, accion) => {
         const nuevasCapas = [...capas];
         if (accion === 'aceptar') {
             const capaData = nuevasCapas[capaIdx];
+            // Reemplazar las vías de la foto en la que se hizo la propuesta. Las capas antiguas no
+            // guardan la foto: se aplican a la que está abierta, como antes.
+            const destino = capaData.fotoId ? fotos.findIndex((f, i) => (f.id || `f${i}`) === capaData.fotoId) : fotoIdx;
+            if (destino < 0) { alert('La foto de esta propuesta ya no existe en el croquis.'); return; }
             nuevasCapas[capaIdx] = { ...capaData, estado: 'aceptado' };
-            // Reemplazar vías con las de la capa
-            setVias(capaData.vias);
+            setFotos(fs => fs.map((f, i) => i === destino ? { ...f, vias: capaData.vias } : f));
+            if (destino !== fotoIdx) cambiarFoto(destino);
         } else {
             nuevasCapas[capaIdx] = { ...nuevasCapas[capaIdx], estado: 'rechazado' };
         }
@@ -595,8 +572,7 @@ export default function CroquisEscalada({ onExit, croquisInicial, registrarSalid
             return false;
         }
         if (esAjeno) {
-            if (!window.confirm('Al guardar, tus cambios se enviarán al propietario del croquis para que los apruebe. ¿Continuar?')) return false;
-            await guardarComoCapa();
+            alert('Solo el autor y los editores pueden guardar este croquis. Si está abierto a propuestas, ábrelo y usa «Proponer cambios».');
             return false;
         }
         return ejecutarGuardado({ silencioso });
@@ -992,6 +968,22 @@ export default function CroquisEscalada({ onExit, croquisInicial, registrarSalid
         ? [combinacionActual.inicio, ...intermediosCombiOrdenados, ...(combinacionActual.fin ? [combinacionActual.fin] : [])]
         : [];
 
+    // Vías de este croquis, para no sugerir las que ya están puestas
+    const viasEnEsteCroquis = new Set(fotos.flatMap(f => (f.vias || []).filter(v => v.info?.nombre).map(v => claveVia(infoCroquis.escuela, v.info.nombre))));
+    // Rellena una vía con una sugerencia de vía subida por un equipador
+    const aplicarSugerencia = (via, s) => ({
+        ...via,
+        info: { ...via.info, nombre: s.nombre, grado: s.grado || via.info?.grado || '', equipador: s.equipadorNombre || via.info?.equipador || '', equipadorId: s.equipadorId || null, anio: s.anio || via.info?.anio || '', info: s.info || via.info?.info || '' },
+        textos: (via.textos || []).map(t => t.type === 'grado' ? { ...t, text: s.grado || t.text } : t),
+    });
+
+    // La sugerencia también completa los datos del sector que aún estén vacíos
+    const completarSectorConSugerencia = (s) => setInfoCroquis(p => {
+        const n = { ...p };
+        ['escuela', 'sector', 'pais', 'comunidad', 'provincia', 'lat', 'lng'].forEach(k => { if (!String(n[k] ?? '').trim() && s[k]) n[k] = s[k]; });
+        return n;
+    });
+
     const capasPendientes = capas.filter(c => c.estado === 'pendiente');
     // En móvil la barra superior se desplaza en horizontal: las acciones principales van primero
     const ordenAccion = esMovil ? { order: -1 } : {};
@@ -1113,11 +1105,10 @@ export default function CroquisEscalada({ onExit, croquisInicial, registrarSalid
                     <button
                         onClick={guardarEnFirebase}
                         style={{ ...st.btnIcono, ...ordenAccion, background: guardando ? 'rgba(46,204,113,0.3)' : 'rgba(46,204,113,0.6)', minWidth: progresoSubida ? 120 : 'auto', fontSize: '0.75rem', gap: 6 }}
-                        title={!usuario ? 'Guardar (necesitas registrarte)' : esAjeno ? 'Proponer cambios al propietario' : 'Guardar en la nube'}
+                        title={!usuario ? 'Guardar (necesitas registrarte)' : 'Guardar en la nube'}
                         disabled={guardando}
                     >
                         <Save size={18} />
-                        {esAjeno && <span style={{ color: 'white', fontSize: '0.75rem' }}>Proponer</span>}
                         {progresoSubida && <span style={{ color: 'white' }}>{progresoSubida}</span>}
                     </button>
 
@@ -1156,7 +1147,7 @@ export default function CroquisEscalada({ onExit, croquisInicial, registrarSalid
             {esAjeno && (
                 <div style={{ background: '#fff3cd', padding: '8px 16px', fontSize: '0.85rem', color: '#856404', borderBottom: '1px solid #ffc107', display: 'flex', alignItems: 'center', gap: 8 }}>
                     <Layers size={16} />
-                    Estás editando un croquis de otro usuario. Al guardar, tus cambios se enviarán para aprobación del propietario.
+                    Este croquis es de otro usuario y no puedes guardar cambios. Si está abierto a propuestas, ábrelo y usa «Proponer cambios».
                 </div>
             )}
 
@@ -1654,7 +1645,7 @@ export default function CroquisEscalada({ onExit, croquisInicial, registrarSalid
                                         <td style={st.td}>
                                             <div style={{ display: 'flex', gap: 6 }}>
                                                 <button onClick={() => { setEditandoInfoViaIdx(i); }} style={st.btnAccion} title="Editar información">ℹ️</button>
-                                                {!esAjeno && <button onClick={() => setViaCompartiendo(v)} style={st.btnAccion} title="Compartir tarjeta de la vía">🔗</button>}
+                                                {!esAjeno && <button onClick={() => setViaCompartiendo(v)} style={st.btnAccion} title="Colaborar: enlace para proponer cambios en esta vía">🔗</button>}
                                                 {foto.soloLista ? (
                                                     <>
                                                         <button onClick={() => moverViaEnLista(i, -1)} disabled={i === 0} style={st.btnAccion} title="Subir"><ChevronUp size={16} /></button>
@@ -1735,7 +1726,7 @@ export default function CroquisEscalada({ onExit, croquisInicial, registrarSalid
             )}
 
             {viaCompartiendo && (
-                <CompartirViaModal croquisId={croquísId.current} via={viaCompartiendo} onClose={() => setViaCompartiendo(null)} />
+                <ColaborarModal croquisId={croquísId.current} via={viaCompartiendo} onClose={() => setViaCompartiendo(null)} />
             )}
 
             {/* MODAL: Información del Croquis */}
@@ -1747,7 +1738,7 @@ export default function CroquisEscalada({ onExit, croquisInicial, registrarSalid
                             <button onClick={() => setMostrarModalCroquis(false)} style={st.btnClose}><X size={20} /></button>
                         </div>
                         <div style={{ ...st.modalBody, maxHeight: '82vh', overflowY: 'auto' }}>
-                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 15 }}>
+                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '0 15px' }}>
                                 <div>
                                     <AutocompleteInput label="Escuela" value={infoCroquis.escuela} onChange={v => setInfoCroquis(p => ({ ...p, escuela: v }))} ph="Ej: Rodellar" opciones={escuelasDisponibles} />
                                     {(() => {
@@ -1841,7 +1832,11 @@ export default function CroquisEscalada({ onExit, croquisInicial, registrarSalid
                             <button onClick={() => setMostrarModalInfo(false)} style={st.btnClose}><X size={20} /></button>
                         </div>
                         <div style={st.modalBody}>
-                            <InputModal label="Nombre *" value={viaActual.info.nombre} onChange={v => setViaActual(p => ({ ...p, info: { ...p.info, nombre: v } }))} ph="Ej: La Vía Láctea" />
+                            <ViaNombreInput label="Nombre *" value={viaActual.info.nombre} ph="Ej: La Vía Láctea"
+                                escuela={infoCroquis.escuela} sector={infoCroquis.sector} excluir={viasEnEsteCroquis}
+                                inputStyle={st.input} labelStyle={st.label}
+                                onChange={v => setViaActual(p => ({ ...p, info: { ...p.info, nombre: v } }))}
+                                onElegir={s => { setViaActual(p => aplicarSugerencia(p, s)); completarSectorConSugerencia(s); }} />
                             <div style={{ marginBottom: 15 }}>
                                 <label style={st.label}>{reunionesOrdenadas(viaActual).length ? 'Grado de la vía (último largo)' : 'Grado propuesto'}</label>
                                 <GradeSelector value={viaActual.info.grado} onChange={v => setViaActual(p => ({
@@ -2044,9 +2039,12 @@ export default function CroquisEscalada({ onExit, croquisInicial, registrarSalid
                             <button onClick={cerrarInfoVia} style={st.btnClose}><X size={20} /></button>
                         </div>
                         <div style={st.modalBody}>
-                            <InputModal label="Nombre *"
+                            <ViaNombreInput label="Nombre *"
                                 value={vias[editandoInfoViaIdx].info?.nombre || ''}
+                                escuela={infoCroquis.escuela} sector={infoCroquis.sector} excluir={viasEnEsteCroquis}
+                                inputStyle={st.input} labelStyle={st.label}
                                 onChange={v => setVias(prev => { const c = [...prev]; c[editandoInfoViaIdx] = { ...c[editandoInfoViaIdx], info: { ...c[editandoInfoViaIdx].info, nombre: v } }; return c; })}
+                                onElegir={s => { setVias(prev => { const c = [...prev]; c[editandoInfoViaIdx] = aplicarSugerencia(c[editandoInfoViaIdx], s); return c; }); completarSectorConSugerencia(s); }}
                                 ph="Ej: La Vía Láctea" />
                             <div style={{ marginBottom: 15 }}>
                                 <label style={st.label}>{reunionesOrdenadas(vias[editandoInfoViaIdx]).length ? 'Grado de la vía (último largo)' : 'Grado'}</label>
@@ -2339,18 +2337,6 @@ function TextoEditable({ txt, color, onMove, onRotate, onDelete, contenedorRef, 
     );
 }
 
-function parsearUrlMaps(entrada) {
-    if (!entrada?.trim()) return '';
-    const s = entrada.trim();
-    const coordsMatch = s.match(/@(-?\d+\.\d+),(-?\d+\.\d+)/);
-    if (coordsMatch) return `https://maps.google.com/maps?q=${coordsMatch[1]},${coordsMatch[2]}&output=embed&z=15`;
-    const qMatch = s.match(/[?&]q=([^&]+)/);
-    if (qMatch) return `https://maps.google.com/maps?q=${qMatch[1]}&output=embed`;
-    const placeMatch = s.match(/place\/([^/@?]+)/);
-    if (placeMatch) return `https://maps.google.com/maps?q=${placeMatch[1]}&output=embed`;
-    if (!s.startsWith('http')) return `https://maps.google.com/maps?q=${encodeURIComponent(s)}&output=embed`;
-    return `https://maps.google.com/maps?q=${encodeURIComponent(s)}&output=embed`;
-}
 
 function AutocompleteInput({ label, value, onChange, ph, opciones }) {
     const [abierto, setAbierto] = useState(false);

@@ -13,16 +13,17 @@ import { db } from '../firebase';
 export const COL_PLANES = 'planes_entrenamiento';
 export const COL_BLOQUES = 'bloques_entrenamiento';
 
-// Claves del plan que puede tocar el entrenador (igual que en firestore.rules)
-export const CLAVES_ENTRENADOR = ['ajustes', 'bloqueos', 'extras', 'notasEntrenador', 'comentarios', 'mensajeEntrenador', 'vistoPorEntrenador', 'sesiones', 'semanas', 'plantillaNombre', 'updatedAt'];
 
 // Avisos en la campana. tipo: entreno_sesion | entreno_entrenador | bloque_aprobado | bloque_rechazado
 export function notificar(uids, datos) {
     const destinos = [...new Set((uids || []).filter(Boolean))];
     if (!destinos.length) return Promise.resolve();
     const lote = writeBatch(db);
+    // Las reglas limitan la longitud de los textos de los avisos
+    const textos = Object.fromEntries(Object.entries(datos).map(([k, v]) =>
+        [k, typeof v === 'string' ? v.slice(0, k === 'textoPreview' ? 500 : 80) : v]));
     destinos.forEach(uid => lote.set(doc(collection(db, 'notificaciones', uid, 'items')), {
-        ...datos, leido: false, createdAt: serverTimestamp(),
+        ...textos, leido: false, createdAt: serverTimestamp(),
     }));
     return lote.commit().catch(e => console.error(e));
 }

@@ -3,12 +3,12 @@ import { Send, Plus, Pencil, Undo2, Check, ChevronLeft, ChevronRight, ArrowLeft 
 import { addDoc, collection, doc, getDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
-import { aplicarCambiosCroquis, puedeEditarCroquis, resolverEquipadores } from '../utils/equipadores';
+import { aplicarCambiosCroquis, fotosDeCroquis, puedeEditarCroquis, resolverEquipadores } from '../utils/equipadores';
 import CroquisImagen from '../components/CroquisImagen';
 import {
-    FormularioVia, CampoAutor, EnlaceNoDisponible, fotosDeDatos,
+    FormularioVia, CampoAutor, EnlaceNoDisponible,
     valorDeVia, cambiosDeValor, errorDeValor, st as estilos,
-} from './TarjetaViaPagina';
+} from '../components/FormularioVia';
 
 const COLORES = ['#e74c3c', '#3498db', '#2ecc71', '#f1c40f', '#9b59b6', '#e67e22', '#1abc9c', '#e84393'];
 export const MAX_CAMBIOS_CROQUIS = 100;
@@ -23,15 +23,14 @@ const viaConValor = (via, valor) => ({
     textos: [],
 });
 
-// Propuestas de cambios en todo el croquis sin registrarse: modificar cualquier vía o añadir
-// vías nuevas. Todo llega en una sola propuesta. Se entra de dos formas:
-//  - token: enlace de sugerencias; la propuesta va a quien creó el enlace.
-//  - croquisId: croquis abierto a propuestas; la propuesta va al autor del croquis.
-// Quien puede editar el croquis (autor o invitado por correo) guarda los cambios directamente.
-export default function CroquisCompartidoPagina({ token = null, croquisId = null, viaInicial = null, onSalir }) {
+// Colaborar en un croquis abierto a propuestas: cualquiera, con o sin cuenta, corrige vías
+// (datos y trazado) o añade vías nuevas, y todo llega en una sola propuesta al autor del
+// croquis, que la acepta o no. Quien puede editar el croquis (autor o invitado por correo)
+// guarda directamente, sin revisión.
+// viaInicial: vía desde la que se pidió proponer cambios; se abre directamente.
+export default function ProponerCambiosPagina({ croquisId, viaInicial = null, onSalir }) {
     const { usuario } = useAuth();
-    const [estado, setEstado] = useState('cargando'); // cargando | listo | invalida
-    const [tarjeta, setTarjeta] = useState(null); // { croquisId, creadoPor }
+    const [estado, setEstado] = useState('cargando'); // cargando | listo | cerrado | invalida
     const [croquis, setCroquis] = useState(null);
     const [datosCroquis, setDatosCroquis] = useState(null);
     const [fotoIdx, setFotoIdx] = useState(0);
@@ -45,22 +44,12 @@ export default function CroquisCompartidoPagina({ token = null, croquisId = null
     useEffect(() => {
         (async () => {
             try {
-                let t = null;
-                if (token) {
-                    const snapT = await getDoc(doc(db, 'tarjetas_croquis', token));
-                    if (!snapT.exists()) { setEstado('invalida'); return; }
-                    t = snapT.data();
-                }
-                const snap = await getDoc(doc(db, 'croquis_escalada', t?.croquisId || croquisId));
+                const snap = await getDoc(doc(db, 'croquis_escalada', croquisId));
                 if (!snap.exists()) { setEstado('invalida'); return; }
                 const datos = snap.data();
-                if (!t) {
-                    t = { croquisId: snap.id, creadoPor: datos.creadoPor };
-                    if (!datos.abiertoPropuestas && !puedeEditarCroquis(datos, usuario)) { setEstado('cerrado'); return; }
-                }
-                const fotos = fotosDeDatos(datos).filter(f => f.imagenUrl || f.soloLista);
+                if (!datos.abiertoPropuestas && !puedeEditarCroquis(datos, usuario)) { setEstado('cerrado'); return; }
+                const fotos = fotosDeCroquis(datos).filter(f => f.imagenUrl || f.soloLista);
                 if (fotos.length === 0) { setEstado('invalida'); return; }
-                setTarjeta(t);
                 setDatosCroquis(datos);
                 // Abrir directamente la vía desde la que se pidió proponer cambios
                 const iv = viaInicial != null ? fotos.findIndex(f => (f.vias || []).some(v => String(v.id) === String(viaInicial))) : -1;
@@ -79,7 +68,7 @@ export default function CroquisCompartidoPagina({ token = null, croquisId = null
                 setEstado('invalida');
             }
         })();
-    }, [token, croquisId, usuario?.uid]); // eslint-disable-line
+    }, [croquisId, usuario?.uid]); // eslint-disable-line
 
     if (estado === 'cargando') return <div style={estilos.pantallaMensaje}>Cargando…</div>;
     if (estado === 'invalida') return <EnlaceNoDisponible onSalir={onSalir} />;
@@ -87,7 +76,7 @@ export default function CroquisCompartidoPagina({ token = null, croquisId = null
         return (
             <div style={estilos.pantallaMensaje}>
                 <p>Este croquis no está abierto a propuestas.</p>
-                <button onClick={onSalir} style={{ ...estilos.btnGuardar, background: '#2c3e50', marginTop: 14 }}>Ir al inicio</button>
+                <button onClick={onSalir} style={{ ...estilos.btnGuardar, background: '#2c3e50', marginTop: 14 }}>Ver el croquis</button>
             </div>
         );
     }
@@ -167,16 +156,15 @@ export default function CroquisCompartidoPagina({ token = null, croquisId = null
             });
             if (directo) {
                 const infos = await resolverEquipadores(cambios.map(c => ({ info: c.info })), usuario.uid);
-                const perdidos = await aplicarCambiosCroquis(tarjeta.croquisId, cambios.map((c, i) => ({ ...c, info: infos[i].info })), null);
+                const perdidos = await aplicarCambiosCroquis(croquisId, cambios.map((c, i) => ({ ...c, info: infos[i].info })), null);
                 setEdiciones({});
                 setMensaje({ tipo: 'ok', texto: perdidos ? `Cambios guardados. ${perdidos} no se aplicaron porque la vía o la foto ya no existen.` : 'Cambios guardados en el croquis.' });
                 setGuardando(false);
                 return;
             }
             await addDoc(collection(db, 'propuestas_croquis'), {
-                ...(token ? { token } : {}),
-                croquisId: tarjeta.croquisId,
-                paraUid: tarjeta.creadoPor,
+                croquisId,
+                paraUid: datosCroquis.creadoPor,
                 autorNombre: autorNombre.trim().slice(0, 60),
                 cambios,
                 estado: 'pendiente',
@@ -192,12 +180,10 @@ export default function CroquisCompartidoPagina({ token = null, croquisId = null
 
     const cabecera = (
         <div style={estilos.topbar}>
-            {croquisId && (
-                <button onClick={() => { if (numCambios === 0 || window.confirm('Tienes cambios sin enviar. ¿Salir igualmente?')) onSalir(); }}
-                    style={{ background: 'none', border: 'none', color: 'white', cursor: 'pointer', display: 'flex', padding: 4, flexShrink: 0 }} title="Volver al croquis">
-                    <ArrowLeft size={20} />
-                </button>
-            )}
+            <button onClick={() => { if (numCambios === 0 || window.confirm('Tienes cambios sin enviar. ¿Salir igualmente?')) onSalir(); }}
+                style={{ background: 'none', border: 'none', color: 'white', cursor: 'pointer', display: 'flex', padding: 4, flexShrink: 0 }} title="Volver al croquis">
+                <ArrowLeft size={20} />
+            </button>
             <div style={{ minWidth: 0, flex: 1 }}>
                 <div style={{ color: 'white', fontWeight: 'bold' }}>{directo ? 'Editar vías del croquis' : 'Proponer cambios en el croquis'}</div>
                 {croquis.titulo && <div style={{ color: 'rgba(255,255,255,0.6)', fontSize: '0.78rem', overflowWrap: 'anywhere' }}>{croquis.titulo}</div>}
@@ -212,7 +198,7 @@ export default function CroquisCompartidoPagina({ token = null, croquisId = null
 
     const avisos = mensaje && <div style={{ ...(mensaje.tipo === 'ok' ? estilos.ok : estilos.error), marginBottom: 10 }}>{mensaje.texto}</div>;
 
-    // Edición de una vía: el mismo formulario que la tarjeta de vía
+    // Edición de una vía
     if (abierta) {
         const esNueva = abierta.clave.startsWith('n:');
         return (
@@ -246,7 +232,7 @@ export default function CroquisCompartidoPagina({ token = null, croquisId = null
                         <p style={estilos.ayuda}>Puedes editar este croquis: los cambios se guardan directamente, sin revisión.</p>
                     ) : (
                         <CampoAutor valor={autorNombre} onChange={v => { setAutorNombre(v); setMensaje(null); }}
-                            texto="Corrige las vías que quieras o añade vías nuevas. Todo llegará en una sola propuesta a quien gestiona el croquis; si la acepta, aparecerás como colaborador de esas vías." />
+                            texto="No hace falta cuenta. Corrige las vías que quieras o añade vías nuevas: todo llegará en una sola propuesta al autor del croquis, y si la acepta aparecerás como colaborador de esas vías." />
                     )}
 
                     {croquis.fotos.length > 1 && (

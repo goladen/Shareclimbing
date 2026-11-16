@@ -24,12 +24,6 @@ export const largosVia = (via) => {
     ];
 };
 
-// Texto de observación: «L1 6a · L2 6b · L3 6c (grado de la vía)»
-export const textoLargos = (via) => largosVia(via)
-    .filter(l => !l.final)
-    .map(l => `L${l.n}${l.grado ? ` ${l.grado}` : ''}`)
-    .join(' · ');
-
 // Bloque para las fichas de vía: lista de largos con su grado
 export function LargosVia({ via, estilo }) {
     const largos = largosVia(via);

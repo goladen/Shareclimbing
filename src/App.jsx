@@ -9,8 +9,7 @@ import CroquisViewer from './pages/CroquisViewer';
 import ProfilePage from './pages/ProfilePage';
 import EscuelaPagina from './pages/EscuelaPagina';
 import RocodromoPagina from './pages/RocodromoPagina';
-import TarjetaViaPagina from './pages/TarjetaViaPagina';
-import CroquisCompartidoPagina from './pages/CroquisCompartidoPagina';
+import ProponerCambiosPagina from './pages/ProponerCambiosPagina';
 import EquipadorPagina from './pages/EquipadorPagina';
 import JuegoPikt from './pages/JuegoPikt';
 import GrabarItinerarioPagina from './pages/GrabarItinerarioPagina';
@@ -35,10 +34,11 @@ function leerHash() {
     if (mj) return { tipo: 'juego', path: mj[1] };
     const mq = hash.match(/^#\/equipador\/(.+)$/);
     if (mq) return { tipo: 'equipador', id: mq[1] };
+    // Enlaces antiguos con token (tarjeta de vía y sugerencias): se redirigen a las propuestas
     const mv = hash.match(/^#\/via\/(.+)$/);
-    if (mv) return { tipo: 'via', token: mv[1] };
+    if (mv) return { tipo: 'enlaceAntiguo', coleccion: 'tarjetas_via', token: mv[1] };
     const ms = hash.match(/^#\/sugerir\/(.+)$/);
-    if (ms) return { tipo: 'sugerir', token: ms[1] };
+    if (ms) return { tipo: 'enlaceAntiguo', coleccion: 'tarjetas_croquis', token: ms[1] };
     const mp = hash.match(/^#\/proponer\/([^/]+)(?:\/via\/(.+))?$/);
     if (mp) return { tipo: 'proponer', id: mp[1], via: mp[2] || null };
     const mr = hash.match(/^#\/rocodromo\/([^/]+)(?:\/bloque\/(.+))?$/);
@@ -63,9 +63,18 @@ async function resolverHash() {
     if (enlace.tipo === 'entrenamiento') return { name: 'entrenamiento', sesionId: enlace.sesionId || null, vista: enlace.vista || null };
     if (enlace.tipo === 'inicio') return { name: 'home', vista: enlace.vista };
     if (enlace.tipo === 'equipador') return { name: 'equipador', id: enlace.id };
-    if (enlace.tipo === 'via') return { name: 'tarjetaVia', token: enlace.token };
-    if (enlace.tipo === 'sugerir') return { name: 'croquisCompartido', token: enlace.token };
-    if (enlace.tipo === 'proponer') return { name: 'croquisCompartido', croquisId: enlace.id, via: enlace.via };
+    if (enlace.tipo === 'proponer') return { name: 'proponer', croquisId: enlace.id, via: enlace.via };
+    if (enlace.tipo === 'enlaceAntiguo') {
+        try {
+            const snap = await getDoc(doc(db, enlace.coleccion, enlace.token));
+            if (snap.exists()) {
+                const { croquisId, viaId = null } = snap.data();
+                window.history.replaceState(null, '', `${window.location.pathname}#/proponer/${croquisId}${viaId != null ? `/via/${viaId}` : ''}`);
+                return { name: 'proponer', croquisId, via: viaId };
+            }
+        } catch (e) { /* enlace desactivado o sin red — ir a home */ }
+        return { name: 'home' };
+    }
     if (enlace.tipo === 'rocodromo') return { name: 'rocodromo', id: enlace.id, bloque: enlace.bloque };
     if (enlace.tipo === 'escuela') {
         return { name: 'escuela', id: enlace.id, sector: enlace.sector };
@@ -127,7 +136,7 @@ export default function App() {
     // Croquis abierto a propuestas: cualquiera propone cambios, con o sin cuenta
     const irAProponer = (croquisId, viaId = null) => {
         window.history.pushState(null, '', `${window.location.pathname}#/proponer/${croquisId}${viaId != null ? `/via/${viaId}` : ''}`);
-        setPantalla({ name: 'croquisCompartido', croquisId, via: viaId });
+        setPantalla({ name: 'proponer', croquisId, via: viaId });
     };
     const volverAlCroquis = (croquisId) => {
         window.history.pushState(null, '', `${window.location.pathname}#/croquis/${croquisId}`);
@@ -190,13 +199,10 @@ export default function App() {
             {pantalla.name === 'equipador' && (
                 <EquipadorPagina key={pantalla.id} equipadorId={pantalla.id} onVolver={() => irAHome('equipadores')} onVerCroquis={(c) => irAViewer(c)} />
             )}
-            {pantalla.name === 'tarjetaVia' && (
-                <TarjetaViaPagina key={pantalla.token} token={pantalla.token} onSalir={() => irAHome()} />
-            )}
-            {pantalla.name === 'croquisCompartido' && (
-                <CroquisCompartidoPagina key={pantalla.token || `${pantalla.croquisId}/${pantalla.via || ''}`}
-                    token={pantalla.token} croquisId={pantalla.croquisId} viaInicial={pantalla.via}
-                    onSalir={pantalla.croquisId ? () => volverAlCroquis(pantalla.croquisId) : () => irAHome()} />
+            {pantalla.name === 'proponer' && (
+                <ProponerCambiosPagina key={`${pantalla.croquisId}/${pantalla.via || ''}`}
+                    croquisId={pantalla.croquisId} viaInicial={pantalla.via}
+                    onSalir={() => volverAlCroquis(pantalla.croquisId)} />
             )}
             {pantalla.name === 'rocodromo' && (
                 <RocodromoPagina key={`${pantalla.id}/${pantalla.bloque || ''}`} rocodromoId={pantalla.id} bloqueInicial={pantalla.bloque} onVolver={() => irAHome('rocodromos')} />

@@ -4,7 +4,8 @@ service cloud.firestore {
 
     match /croquis_escalada/{docId} {
       allow read: if true;
-      allow create: if request.auth != null;
+      // Nadie puede crear un croquis a nombre de otra persona
+      allow create: if request.auth != null && request.resource.data.creadoPor == request.auth.uid;
       allow delete: if request.auth != null && request.auth.uid == resource.data.creadoPor;
 
       // El autor cambia lo que quiera
@@ -16,11 +17,6 @@ service cloud.firestore {
             || request.auth.token.email in resource.data.get('editoresEmail', []))
         && request.resource.data.diff(resource.data).affectedKeys()
              .hasOnly(['infoCroquis', 'fotos', 'imagenUrl', 'vias', 'formas', 'visibilidad', 'abiertoPropuestas', 'updatedAt']);
-
-      // Proponer cambios al autor: solo añadir una capa
-      allow update: if request.auth != null
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['capas'])
-        && request.resource.data.capas.size() == resource.data.get('capas', []).size() + 1;
 
       // Quien creó una escuela puede sacar de ella un croquis (solo vaciar el campo escuela).
       // desvinculadoDe indica la escuela, y se comprueba que el croquis pertenece a ella.
@@ -44,51 +40,18 @@ service cloud.firestore {
       }
     }
 
-    // Enlaces de tarjeta de vía. El id del documento es el secreto: se puede abrir
-    // conociéndolo, pero solo quien lo creó puede listar los suyos.
+    // Enlaces antiguos con token (tarjeta de vía y sugerencias). Ya no se crean: solo se leen
+    // para redirigir quien los abre a la página de propuestas del croquis.
     match /tarjetas_via/{token} {
       allow get: if true;
-      allow list: if request.auth != null && resource.data.creadoPor == request.auth.uid;
-      allow create: if request.auth != null
-        && request.resource.data.creadoPor == request.auth.uid
-        && (get(/databases/$(database)/documents/croquis_escalada/$(request.resource.data.croquisId)).data.creadoPor == request.auth.uid
-            || request.auth.uid in get(/databases/$(database)/documents/croquis_escalada/$(request.resource.data.croquisId)).data.get('editores', [])
-            || request.auth.token.email in get(/databases/$(database)/documents/croquis_escalada/$(request.resource.data.croquisId)).data.get('editoresEmail', []));
-      allow delete: if request.auth != null && (resource.data.creadoPor == request.auth.uid
-        || get(/databases/$(database)/documents/croquis_escalada/$(resource.data.croquisId)).data.creadoPor == request.auth.uid);
     }
-
-    // Enlaces para proponer cambios en todo un croquis. Igual que las tarjetas de vía, sin viaId.
     match /tarjetas_croquis/{token} {
-      function croquisDe(id) { return get(/databases/$(database)/documents/croquis_escalada/$(id)).data; }
       allow get: if true;
-      allow list: if request.auth != null && resource.data.creadoPor == request.auth.uid;
-      allow create: if request.auth != null
-        && request.resource.data.keys().hasOnly(['croquisId', 'creadoPor', 'createdAt'])
-        && request.resource.data.creadoPor == request.auth.uid
-        && (croquisDe(request.resource.data.croquisId).creadoPor == request.auth.uid
-            || request.auth.uid in croquisDe(request.resource.data.croquisId).get('editores', [])
-            || request.auth.token.email in croquisDe(request.resource.data.croquisId).get('editoresEmail', []));
-      allow delete: if request.auth != null && (resource.data.creadoPor == request.auth.uid
-        || croquisDe(resource.data.croquisId).creadoPor == request.auth.uid);
     }
 
-    // Propuestas enviadas desde el enlace de un croquis, sin registrarse: varias vías
-    // modificadas o nuevas en una sola propuesta, dirigida a quien creó el enlace.
+    // Propuestas en un croquis abierto a propuestas: cualquiera, con o sin cuenta, envía varias
+    // vías modificadas o nuevas en una sola propuesta, dirigida al autor del croquis.
     match /propuestas_croquis/{id} {
-      function tarjeta() {
-        return get(/databases/$(database)/documents/tarjetas_croquis/$(request.resource.data.token)).data;
-      }
-      allow create: if request.resource.data.keys().hasOnly(['token', 'croquisId', 'paraUid', 'autorNombre', 'cambios', 'estado', 'createdAt'])
-        && request.resource.data.estado == 'pendiente'
-        && request.resource.data.createdAt == request.time
-        && request.resource.data.autorNombre is string
-        && request.resource.data.autorNombre.size() > 0 && request.resource.data.autorNombre.size() <= 60
-        && request.resource.data.cambios is list
-        && request.resource.data.cambios.size() > 0 && request.resource.data.cambios.size() <= 100
-        && tarjeta().croquisId == request.resource.data.croquisId
-        && tarjeta().creadoPor == request.resource.data.paraUid;
-      // Croquis abierto a propuestas: cualquiera, sin enlace, dirigida al autor del croquis
       allow create: if request.resource.data.keys().hasOnly(['croquisId', 'paraUid', 'autorNombre', 'cambios', 'estado', 'createdAt'])
         && request.resource.data.estado == 'pendiente'
         && request.resource.data.createdAt == request.time
@@ -103,21 +66,9 @@ service cloud.firestore {
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['estado']);
     }
 
-    // Propuestas enviadas desde una tarjeta de vía, sin necesidad de registrarse.
-    // Solo se aceptan con un enlace vigente y van dirigidas a quien lo creó.
+    // Propuestas sobre una vía. Hoy solo las envía un equipador vinculado; quedan además las
+    // antiguas enviadas con tarjeta de vía, que se pueden seguir revisando.
     match /propuestas_via/{id} {
-      function tarjeta() {
-        return get(/databases/$(database)/documents/tarjetas_via/$(request.resource.data.token)).data;
-      }
-      allow create: if request.resource.data.keys().hasOnly(['token', 'croquisId', 'viaId', 'paraUid', 'autorNombre', 'cambios', 'estado', 'createdAt'])
-        && request.resource.data.estado == 'pendiente'
-        && request.resource.data.createdAt == request.time
-        && request.resource.data.autorNombre is string
-        && request.resource.data.autorNombre.size() > 0 && request.resource.data.autorNombre.size() <= 60
-        && request.resource.data.cambios.keys().hasOnly(['info', 'trazado'])
-        && tarjeta().croquisId == request.resource.data.croquisId
-        && tarjeta().viaId == request.resource.data.viaId
-        && tarjeta().creadoPor == request.resource.data.paraUid;
       // Propuestas de un equipador vinculado sobre sus vías, dirigidas a quien creó el croquis.
       // Solo puede ponerse a sí mismo como equipador y no cambia el trazado.
       allow create: if request.auth != null
@@ -179,6 +130,24 @@ service cloud.firestore {
              && request.resource.data.solicitudVinculo == null));
     }
 
+    // Vías que un equipador sube en bloque antes de que estén en un croquis (un documento por ficha).
+    // Las sube y las quita el usuario vinculado a la ficha, o la administración.
+    match /vias_equipador/{equipadorId} {
+      function gestionaFicha() {
+        return request.auth != null && (
+          get(/databases/$(database)/documents/equipadores/$(equipadorId)).data.get('usuarioUid', null) == request.auth.uid
+          || request.auth.token.email == 'goladen@gmail.com');
+      }
+      allow read: if true;
+      allow create, update: if gestionaFicha()
+        && request.resource.data.keys().hasOnly(['vias', 'equipadorNombre', 'updatedAt'])
+        && request.resource.data.vias is list
+        && request.resource.data.vias.size() <= 2000
+        && request.resource.data.equipadorNombre is string
+        && request.resource.data.equipadorNombre.size() <= 120;
+      allow delete: if gestionaFicha();
+    }
+
     match /solicitudes_edicion/{id} {
       allow read: if request.auth != null && (
         request.auth.uid == resource.data.autorUid ||
@@ -192,7 +161,7 @@ service cloud.firestore {
 
     match /escuelas/{docId} {
       allow read: if true;
-      allow create: if request.auth != null;
+      allow create: if request.auth != null && request.resource.data.creadoPor == request.auth.uid;
       allow update, delete: if request.auth != null && request.auth.uid == resource.data.creadoPor;
     }
 
@@ -354,10 +323,42 @@ service cloud.firestore {
         && request.resource.data.compartidaConEmail.toSet() == resource.data.compartidaConEmail.toSet().difference([request.auth.token.email].toSet());
     }
 
-    // Notificaciones: cada usuario lee/borra las suyas; cualquier autenticado puede crear
+    // Notificaciones: cada usuario lee, marca y borra las suyas. Crearlas: solo con un tipo
+    // conocido, los campos de siempre y textos cortos; y en las que se puede comprobar, solo
+    // dirigidas a quien corresponde (no se puede llenar de avisos la campana de cualquiera).
     match /notificaciones/{uid}/items/{itemId} {
-      allow read, update, delete: if request.auth != null && request.auth.uid == uid;
-      allow create: if request.auth != null;
+      function n() { return request.resource.data; }
+      function corto(k, max) { return !(k in n()) || n()[k] == null || (n()[k] is string && n()[k].size() <= max); }
+      function croquis() { return get(/databases/$(database)/documents/croquis_escalada/$(n().croquisId)).data; }
+      function escuela() { return get(/databases/$(database)/documents/escuelas/$(n().escuelaId)).data; }
+      function esAdmin() { return request.auth.token.email == 'goladen@gmail.com'; }
+
+      allow read, delete: if request.auth != null && request.auth.uid == uid;
+      allow update: if request.auth != null && request.auth.uid == uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['leido']);
+
+      allow create: if request.auth != null
+        && n().keys().hasOnly(['tipo', 'leido', 'createdAt', 'autorNombre', 'textoPreview',
+             'croquisId', 'croquisNombre', 'escuelaId', 'escuelaNombre',
+             'rocodromoId', 'rocodromoNombre', 'bloqueId', 'bloqueNombre', 'bloqueGrado',
+             'equipadorId', 'equipadorNombre', 'sesionNombre'])
+        && n().leido == false
+        && n().createdAt == request.time
+        && corto('autorNombre', 80) && corto('textoPreview', 500)
+        && corto('croquisNombre', 120) && corto('escuelaNombre', 120) && corto('rocodromoNombre', 120)
+        && corto('bloqueNombre', 120) && corto('bloqueGrado', 20) && corto('equipadorNombre', 120) && corto('sesionNombre', 120)
+        && (
+          // Comentario: al autor del croquis comentado
+          (n().tipo == 'comentario' && croquis().creadoPor == uid)
+          // Croquis añadido a una escuela: a quien creó la escuela
+          || (n().tipo == 'croquis_asociado' && escuela().creadoPor == uid)
+          // Croquis sacado de una escuela: al autor del croquis, y solo quien creó la escuela
+          || (n().tipo == 'croquis_desvinculado' && croquis().creadoPor == uid && escuela().creadoPor == request.auth.uid)
+          // Respuestas de la administración
+          || (n().tipo in ['equipador_vinculado', 'equipador_rechazado', 'bloque_aprobado', 'bloque_rechazado'] && esAdmin())
+          // Avisos en lote (bloques nuevos de un rocódromo) y de entrenamiento
+          || n().tipo in ['bloque_nuevo', 'entreno_sesion', 'entreno_entrenador', 'entreno_aceptado', 'entreno_invitacion']
+        );
     }
   }
 }

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { ArrowLeft, Plus, Minus, X, Save, Trash2, Edit, UserPlus, UserMinus, ImagePlus, Check, Replace, ChevronLeft, ChevronRight, ChevronDown, ChevronUp } from 'lucide-react';
+import { ArrowLeft, Plus, Minus, X, Save, Trash2, Edit, UserPlus, UserMinus, ImagePlus, Replace, ChevronLeft, ChevronRight, ChevronDown, ChevronUp } from 'lucide-react';
 import { addDoc, arrayRemove, arrayUnion, collection, deleteDoc, deleteField, doc, getDoc, getDocs, serverTimestamp, updateDoc, writeBatch } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
@@ -98,11 +98,11 @@ async function avisarMiembros(rocodromo, bloque, usuario) {
             destinatarios.slice(i, i + 500).forEach(uid => lote.set(doc(collection(db, 'notificaciones', uid, 'items')), {
                 tipo: 'bloque_nuevo',
                 rocodromoId: rocodromo.id,
-                rocodromoNombre: rocodromo.nombre,
+                rocodromoNombre: (rocodromo.nombre || '').slice(0, 120),
                 bloqueId: bloque.id,
-                bloqueNombre: bloque.nombre || 'Bloque sin nombre',
-                bloqueGrado: bloque.grado,
-                autorNombre: bloque.creadoPorNombre,
+                bloqueNombre: (bloque.nombre || 'Bloque sin nombre').slice(0, 120),
+                bloqueGrado: bloque.grado || '',
+                autorNombre: (bloque.creadoPorNombre || '').slice(0, 80),
                 leido: false,
                 createdAt: serverTimestamp(),
             }));

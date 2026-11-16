@@ -37,10 +37,19 @@ nav input::placeholder { color: rgba(255,255,255,0.45); }
     .home-app { height: auto !important; min-height: 100dvh; }
     .home-lista { flex: none !important; overflow: visible !important; }
     .propuesta-trazados { grid-template-columns: 1fr; }
+    /* Visor de croquis: los botones en una sola fila deslizable en lugar de varias filas que tapan la foto */
+    .visor-acciones { flex-wrap: nowrap !important; overflow-x: auto; max-width: 100%; scrollbar-width: none; padding-bottom: 2px; }
+    .visor-acciones > * { flex-shrink: 0; }
     .roc-layout { grid-template-columns: minmax(0, 1fr); }
     .ep-bloque { grid-column: span 12; }
     .ep-croquis { flex-direction: column !important; }
     .ep-croquis-foto { width: 100% !important; }
+}
+
+/* iPhone/iPad: Safari amplía la página al tocar un campo con letra de menos de 16px y no la
+   devuelve a su tamaño. Solo en iOS, para no cambiar el aspecto en el resto. */
+@supports (-webkit-touch-callout: none) {
+    input, select, textarea { font-size: max(16px, 1em) !important; }
 }
 
 /* Impresión del plan de entrenamiento */

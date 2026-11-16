@@ -17,7 +17,6 @@ export function cargarEquipadores({ refrescar = false } = {}) {
     return cache;
 }
 
-export const invalidarEquipadores = () => { cache = null; };
 
 export function useEquipadores() {
     const [lista, setLista] = useState(null);
@@ -70,17 +69,26 @@ export const fotosDeCroquis = (c) => c.fotos?.length > 0
     ? c.fotos
     : [{ id: 'f0', imagenUrl: c.imagenUrl, vias: c.vias || [], formas: c.formas || [] }];
 
+const CAMPOS_INFO_VIA = ['nombre', 'grado', 'numero', 'equipador', 'equipadorId', 'anio', 'info'];
+
 // Aplica unos cambios a una vía. colaborador: nombre que se añade a sus colaboradores, o null.
 export const aplicarAVia = (via, cambios, colaborador) => {
     const colaboradores = via.info?.colaboradores || [];
+    // Solo los campos que se muestran al revisar: una propuesta enviada sin cuenta no puede
+    // colar otros (id, color, textos…) que el autor no ve antes de aceptarla
+    const infoPropuesta = Object.fromEntries(CAMPOS_INFO_VIA
+        .filter(k => cambios.info && k in cambios.info)
+        .map(k => [k, cambios.info[k]]));
+    const tz = cambios.trazado;
+    const trazado = tz ? { inicio: tz.inicio ?? null, fin: tz.fin ?? null, intermedios: Array.isArray(tz.intermedios) ? tz.intermedios : [] } : {};
     const info = {
         ...via.info,
-        ...cambios.info,
+        ...infoPropuesta,
         colaboradores: !colaborador || colaboradores.includes(colaborador) ? colaboradores : [...colaboradores, colaborador],
     };
     return {
         ...via,
-        ...(cambios.trazado || {}),
+        ...trazado,
         info,
         textos: (via.textos || []).map(t => t.type === 'grado' ? { ...t, text: info.grado } : t),
     };
@@ -108,7 +116,7 @@ export async function modificarVia(croquisId, viaId, transformar) {
 
 // Vía nueva a partir de un cambio de tipo 'nueva' de una propuesta de croquis
 export const viaDeCambioNuevo = (c, id, colaborador) => aplicarAVia(
-    { id, inicio: null, fin: null, intermedios: [], textos: [], color: c.color || '#e74c3c', grosor: 4, info: {} },
+    { id, inicio: null, fin: null, intermedios: [], textos: [], color: /^#[0-9a-f]{6}$/i.test(c.color || '') ? c.color : '#e74c3c', grosor: 4, info: {} },
     c, colaborador);
 
 // Aplica varios cambios de una propuesta de croquis en una sola transacción.
@@ -190,9 +198,9 @@ export async function responderVinculo(equipador, aceptar, admin) {
     try {
         await addDoc(collection(db, 'notificaciones', sol.uid, 'items'), {
             tipo: aceptar ? 'equipador_vinculado' : 'equipador_rechazado',
-            autorNombre: admin.displayName || 'La administración',
+            autorNombre: (admin.displayName || 'La administración').slice(0, 80),
             equipadorId: equipador.id,
-            equipadorNombre: nombreEquipador(equipador),
+            equipadorNombre: nombreEquipador(equipador).slice(0, 120),
             leido: false,
             createdAt: serverTimestamp(),
         });

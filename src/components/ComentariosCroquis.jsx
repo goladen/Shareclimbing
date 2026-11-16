@@ -47,8 +47,8 @@ export default function ComentariosCroquis({ croquis }) {
                     {
                         tipo: 'comentario',
                         croquisId: croquis.id,
-                        croquisNombre: croquis.infoCroquis?.sector || croquis.infoCroquis?.escuela || 'Croquis',
-                        autorNombre,
+                        croquisNombre: (croquis.infoCroquis?.sector || croquis.infoCroquis?.escuela || 'Croquis').slice(0, 120),
+                        autorNombre: autorNombre.slice(0, 80),
                         textoPreview: texto.trim().slice(0, 80),
                         leido: false,
                         createdAt: serverTimestamp(),

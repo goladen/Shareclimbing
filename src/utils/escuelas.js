@@ -24,10 +24,10 @@ export async function notificarAsociacion({ escuela, croquisId, infoCroquis, usu
         await addDoc(collection(db, 'notificaciones', escuela.creadoPor, 'items'), {
             tipo: 'croquis_asociado',
             croquisId,
-            croquisNombre: nombreCroquis(infoCroquis),
+            croquisNombre: nombreCroquis(infoCroquis).slice(0, 120),
             escuelaId: escuela.id,
-            escuelaNombre: escuela.nombre,
-            autorNombre: usuario.displayName || usuario.email.split('@')[0],
+            escuelaNombre: (escuela.nombre || '').slice(0, 120),
+            autorNombre: (usuario.displayName || usuario.email.split('@')[0]).slice(0, 80),
             textoPreview: '',
             leido: false,
             createdAt: serverTimestamp(),

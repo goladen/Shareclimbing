@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet';
+import { MapContainer, TileLayer, Marker, Popup } from 'react-leaflet';
 import L from 'leaflet';
 import { collection, getDoc, getDocs, deleteDoc, doc } from 'firebase/firestore';
 import { Search, Plus, LogIn, LogOut, Layers, Mountain, User } from 'lucide-react';
@@ -73,20 +73,12 @@ function extraerCoordenadas(info) {
     return null;
 }
 
-function RecenterMap({ coords }) {
-    const map = useMap();
-    useEffect(() => {
-        if (coords) map.setView(coords, 13, { animate: true });
-    }, [coords, map]);
-    return null;
-}
 
 export default function HomePage({ onCrearCroquis, onVerCroquis, onVerPerfil, onVerEscuela, onVerRocodromo, onVerEquipador, onAbrirJuego, vistaInicial }) {
     const { usuario, cerrarSesion, setModalAuth } = useAuth();
     const [croquis, setCroquis] = useState([]);
     const [busqueda, setBusqueda] = useState('');
     const [cargando, setCargando] = useState(true);
-    const [sectorSeleccionado, setSectorSeleccionado] = useState(null);
     const [capaMapa, setCapaMapa] = useState('callejero');
     const [escuelas, setEscuelas] = useState([]);
     const [mostrarModalEscuela, setMostrarModalEscuela] = useState(false);

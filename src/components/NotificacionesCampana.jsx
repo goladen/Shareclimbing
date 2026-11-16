@@ -36,14 +36,14 @@ export default function NotificacionesCampana({ onVerCroquis, onDesvinculado, on
         );
     }, [usuario?.uid]);
 
-    // Propuestas de cambios enviadas desde tarjetas de vía, pendientes de revisar
+    // Propuestas sobre una vía (de equipadores, y las antiguas de tarjetas de vía), pendientes de revisar
     useEffect(() => {
         if (!usuario) return;
         const q = query(collection(db, 'propuestas_via'), where('paraUid', '==', usuario.uid), where('estado', '==', 'pendiente'));
         return onSnapshot(q, snap => setPropuestas(snap.docs.map(d => ({ id: d.id, ...d.data() }))), e => console.error(e));
     }, [usuario?.uid]);
 
-    // Propuestas enviadas desde el enlace de sugerencias de un croquis entero
+    // Propuestas en croquis abiertos a propuestas: varias vías en una sola, con o sin cuenta
     useEffect(() => {
         if (!usuario) return;
         const q = query(collection(db, 'propuestas_croquis'), where('paraUid', '==', usuario.uid), where('estado', '==', 'pendiente'));
