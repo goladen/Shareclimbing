@@ -2,6 +2,8 @@ import React, { useEffect, useRef, useState } from 'react';
 import { X, Download, Printer, Move, List } from 'lucide-react';
 import { ControlesListaVias, agruparVias, useConfigListaVias } from './ConfigListaVias';
 import { dibujarReunionesCanvas } from '../utils/reuniones';
+import { limitesDibujo } from '../utils/limitesDibujo';
+import { dibujarFormaCanvas } from '../utils/anotaciones';
 
 // ─── Helpers de canvas ───────────────────────────────────────────────────────
 
@@ -185,29 +187,7 @@ function dibujarCombinaciones(ctx, combinaciones, xR, yR) {
 }
 
 function dibujarFormas(ctx, formas, xR, yR) {
-    (formas || []).forEach(f => {
-        ctx.strokeStyle = f.color || '#e74c3c';
-        ctx.lineWidth = f.grosor || 2;
-        const fx = f.x * xR, fy = f.y * yR, fw = f.w * xR, fh = f.h * yR;
-        if (f.tipo === 'RECT') {
-            ctx.beginPath();
-            ctx.rect(fx, fy, fw, fh);
-            ctx.stroke();
-        } else if (f.tipo === 'ELIPSE') {
-            ctx.beginPath();
-            ctx.ellipse(fx + fw / 2, fy + fh / 2, fw / 2, fh / 2, 0, 0, Math.PI * 2);
-            ctx.stroke();
-        } else if (f.tipo === 'TEXTO_LIBRE') {
-            ctx.font = `bold ${f.fontSize || 20}px sans-serif`;
-            ctx.strokeStyle = 'black';
-            ctx.lineWidth = 3;
-            ctx.textAlign = 'left';
-            ctx.textBaseline = 'top';
-            ctx.strokeText(f.text || '', fx, fy);
-            ctx.fillStyle = f.color || '#e74c3c';
-            ctx.fillText(f.text || '', fx, fy);
-        }
-    });
+    (formas || []).forEach(f => dibujarFormaCanvas(ctx, f, xR, yR));
 }
 
 // Dibuja la tabla directamente en el canvas (para descarga PNG)
@@ -299,11 +279,14 @@ export default function ModalImpresion({ croquis, onClose }) {
         const imgW = img.naturalWidth, imgH = img.naturalHeight;
         const xR = croquis.srcW ? imgW / croquis.srcW : 1;
         const yR = croquis.srcH ? imgH / croquis.srcH : 1;
-        canvas.width = imgW;
-        canvas.height = imgH;
+        // Lo dibujado fuera de la foto también se imprime: el lienzo crece hasta abarcarlo
+        const lim = limitesDibujo({ vias, combinaciones, formas }, imgW, imgH, xR, yR);
+        canvas.width = Math.round(lim.ancho);
+        canvas.height = Math.round(lim.alto);
         const ctx = canvas.getContext('2d');
         ctx.fillStyle = 'white';
-        ctx.fillRect(0, 0, imgW, imgH);
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.translate(-lim.x0, -lim.y0);
         ctx.drawImage(img, 0, 0, imgW, imgH);
         dibujarFormas(ctx, formas, xR, yR);
         dibujarVias(ctx, viasOrdenadas, numeroInicial, xR, yR);

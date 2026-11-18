@@ -6,7 +6,8 @@ import {
     Globe, Lock, Layers, Square, Circle, AlignLeft, Printer,
     ChevronUp, ChevronDown, List, Copy, ImagePlus, Sparkles, Anchor
 } from 'lucide-react';
-import { MarcasReunion, LargosVia, reunionesOrdenadas } from './utils/reuniones';
+import { FormaSvg, SIMBOLOS, IconoSimbolo, TAM_SIMBOLO, TAM_TEXTO, tamInicial } from './utils/anotaciones';
+import { MarcasReunion, LargosVia, reunionesOrdenadas, posGradoReunion, TAM_GRADO_REUNION } from './utils/reuniones';
 import ModalImpresion from './components/ModalImpresion';
 import ImportarIAModal from './components/ImportarIAModal';
 import ViaNombreInput from './components/ViaNombreInput';
@@ -162,6 +163,12 @@ export default function CroquisEscalada({ onExit, croquisInicial, registrarSalid
     const dibujandoStart = useRef(null);
     const [colorForma, setColorForma] = useState('#e74c3c');
     const [grosorForma, setGrosorForma] = useState(2);
+    const [simboloElegido, setSimboloElegido] = useState('arbol');
+    // Tamaños de los símbolos y textos nuevos, en píxeles de la foto (null: proporcional a la foto)
+    const [tamSimbolo, setTamSimbolo] = useState(null);
+    const [tamTexto, setTamTexto] = useState(null);
+    const tamSimboloActual = tamSimbolo ?? tamInicial(TAM_SIMBOLO, foto.srcW || imgSize.w);
+    const tamTextoActual = tamTexto ?? tamInicial(TAM_TEXTO, foto.srcW || imgSize.w);
 
     // Texto libre en posición
     const [textoLibrePos, setTextoLibrePos] = useState(null);
@@ -175,6 +182,7 @@ export default function CroquisEscalada({ onExit, croquisInicial, registrarSalid
     const [editandoInfoViaIdx, setEditandoInfoViaIdx] = useState(null);
     // Reunión recién colocada a la que se pone grado: { viaIdx (null = vía en creación), pIdx, grado }
     const [gradoReunion, setGradoReunion] = useState(null);
+    const ultimoTamReunion = useRef(TAM_GRADO_REUNION);
 
     // Impresión
     const [mostrarImpresion, setMostrarImpresion] = useState(false);
@@ -389,7 +397,7 @@ export default function CroquisEscalada({ onExit, croquisInicial, registrarSalid
                     ...(Number.isFinite(f.inclinacion) ? { inclinacion: f.inclinacion } : {}),
                     vias: (await resolverEquipadores(f.vias || [], auth.currentUser?.uid)).map(v => ({ id: v.id, inicio: v.inicio, fin: v.fin, intermedios: v.intermedios, textos: v.textos, info: v.info, color: v.color, grosor: v.grosor || 4 })),
                     formas: f.formas || [],
-                    combinaciones: (f.combinaciones || []).map(c => ({ id: c.id, inicio: c.inicio, fin: c.fin, intermedios: c.intermedios, textos: c.textos, info: c.info, color: c.color, grosor: c.grosor || 4 }))
+                    combinaciones: (await resolverEquipadores(f.combinaciones || [], auth.currentUser?.uid)).map(c => ({ id: c.id, inicio: c.inicio, fin: c.fin, intermedios: c.intermedios, textos: c.textos, info: c.info, color: c.color, grosor: c.grosor || 4 }))
                 });
             }
             setProgresoSubida('');
@@ -681,6 +689,12 @@ export default function CroquisEscalada({ onExit, croquisInicial, registrarSalid
             setTextoLibreValor('');
             return;
         }
+        if (herramientaForma === 'SIMBOLO') {
+            const { x, y } = screenToSvg(e.clientX, e.clientY);
+            setFormas(prev => [...prev, { id: Date.now(), tipo: 'SIMBOLO', simbolo: simboloElegido, x, y, tam: tamSimboloActual, color: colorForma }]);
+            return;
+        }
+        if (herramientaForma === 'EDITAR') { setIsDragging(true); setDragStart({ x: e.clientX - pan.x, y: e.clientY - pan.y }); return; }
         if (herramientaForma === 'RECT' || herramientaForma === 'ELIPSE') {
             const { x, y } = screenToSvg(e.clientX, e.clientY);
             dibujandoStart.current = { x, y };
@@ -1242,6 +1256,7 @@ export default function CroquisEscalada({ onExit, croquisInicial, registrarSalid
                             { h: 'RECT', icon: <Square size={15} />, label: 'Rect.' },
                             { h: 'ELIPSE', icon: <Circle size={15} />, label: 'Elipse' },
                             { h: 'TEXTO_LIBRE', icon: <AlignLeft size={15} />, label: 'Texto' },
+                            { h: 'EDITAR', icon: <Move size={15} />, label: 'Mover / tamaño' },
                         ].map(({ h, icon, label }) => (
                             <button key={h}
                                 onClick={() => setHerramientaForma(prev => prev === h ? null : h)}
@@ -1249,6 +1264,24 @@ export default function CroquisEscalada({ onExit, croquisInicial, registrarSalid
                                 {icon} {label}
                             </button>
                         ))}
+                        <div style={{ width: 1, height: 24, background: '#bdc3c7', margin: '0 4px' }} />
+                        <span style={{ fontSize: '0.78rem', fontWeight: 'bold', color: '#7f8c8d' }}>Dibujos:</span>
+                        {Object.entries(SIMBOLOS).map(([k, s]) => {
+                            const activo = herramientaForma === 'SIMBOLO' && simboloElegido === k;
+                            return (
+                                <button key={k} title={s.nombre} aria-label={s.nombre}
+                                    onClick={() => { if (activo) setHerramientaForma(null); else { setSimboloElegido(k); setHerramientaForma('SIMBOLO'); } }}
+                                    style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '4px 8px', borderRadius: 7, fontWeight: 'bold', fontSize: '0.78rem', cursor: 'pointer', background: activo ? '#2c3e50' : 'white', color: activo ? 'white' : '#2c3e50', border: '2px solid #2c3e50' }}>
+                                    <IconoSimbolo simbolo={k} /> {!esMovil && s.nombre}
+                                </button>
+                            );
+                        })}
+                        {herramientaForma === 'SIMBOLO' && (
+                            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.78rem', color: '#7f8c8d', fontWeight: 'bold' }}>
+                                Tamaño
+                                <input type="range" min={10} max={Math.max(300, tamSimboloActual)} value={tamSimboloActual} onChange={e => setTamSimbolo(Number(e.target.value))} style={{ width: 80 }} aria-label="Tamaño del dibujo" />
+                            </label>
+                        )}
                         <div style={{ width: 1, height: 24, background: '#bdc3c7', margin: '0 4px' }} />
                         <span style={{ fontSize: '0.78rem', fontWeight: 'bold', color: '#7f8c8d' }}>Color:</span>
                         {['#e74c3c','#3498db','#2ecc71','#f1c40f','#9b59b6','#2c3e50'].map(c => (
@@ -1266,7 +1299,9 @@ export default function CroquisEscalada({ onExit, croquisInicial, registrarSalid
                         )}
                         {herramientaForma && (
                             <span style={{ fontSize: '0.82rem', color: '#e74c3c', fontWeight: 'bold' }}>
-                                Clic y arrastra sobre la imagen ({herramientaForma === 'TEXTO_LIBRE' ? 'clic para texto' : herramientaForma.toLowerCase()})
+                                {herramientaForma === 'EDITAR' ? 'Arrastra una anotación para moverla; usa − / + para su tamaño y × para borrarla'
+                                    : herramientaForma === 'SIMBOLO' ? `Clic en la imagen para poner: ${SIMBOLOS[simboloElegido].nombre.toLowerCase()}`
+                                    : `Clic y arrastra sobre la imagen (${herramientaForma === 'TEXTO_LIBRE' ? 'clic para texto' : herramientaForma.toLowerCase()})`}
                             </span>
                         )}
                     </div>
@@ -1319,7 +1354,7 @@ export default function CroquisEscalada({ onExit, croquisInicial, registrarSalid
                     <svg
                         width={imgSize.w} height={imgSize.h}
                         // overflow visible: el asa de un punto cercano al borde queda fuera de la foto y debe poder tocarse
-                        style={{ position: 'absolute', top: 0, left: 0, overflow: 'visible', pointerEvents: (editandoViaIdx !== null || creando || herramientaForma) ? 'all' : 'none' }}
+                        style={{ position: 'absolute', top: 0, left: 0, overflow: 'visible', pointerEvents: (editandoViaIdx !== null || editandoCombinacionIdx !== null || creando || esCreandoCombinacion || herramientaForma) ? 'all' : 'none' }}
                     >
                         {vias.map((via, idx) => {
                             const dir = via.inicio && via.fin ? via.fin.y - via.inicio.y : -1;
@@ -1332,7 +1367,8 @@ export default function CroquisEscalada({ onExit, croquisInicial, registrarSalid
                             const fx = via.fin ? via.fin.x * xRatio : 0;
                             const fy = via.fin ? via.fin.y * yRatio : 0;
                             return (
-                                <g key={via.id} onClick={e => { if (fueToque(e)) abrirVia(idx); }}>
+                                <g key={via.id} onClick={e => { if (fueToque(e)) abrirVia(idx); }}
+                                    style={{ pointerEvents: (editandoViaIdx !== null || editandoCombinacionIdx !== null) && !isEditing ? 'none' : undefined }}>
                                     {/* Zona ancha e invisible para poder tocar la línea con el dedo */}
                                     <path d={generarCurvaSuave(pts)} fill="none" stroke="transparent" strokeWidth={24 / scale}
                                         style={{ pointerEvents: puedeAbrirTrazado && editandoViaIdx === null && editandoCombinacionIdx === null ? 'stroke' : 'none', cursor: 'pointer' }} />
@@ -1370,7 +1406,7 @@ export default function CroquisEscalada({ onExit, croquisInicial, registrarSalid
                                             <text x={ix} y={iy + 25} fill="white" fontSize="16" fontWeight="bold" textAnchor="middle">{idx + 1}</text>
                                         </>
                                     )}
-                                    <MarcasReunion via={via} xRatio={xRatio} yRatio={yRatio} />
+                                    <MarcasReunion via={via} xRatio={xRatio} yRatio={yRatio} sinGrados={isEditing} />
                                     {via.fin && (
                                         <>
                                             <circle cx={fx} cy={fy} r="18" fill="none" stroke={via.color} strokeWidth="4" opacity="0.6" />
@@ -1400,6 +1436,11 @@ export default function CroquisEscalada({ onExit, croquisInicial, registrarSalid
                                             )}
                                         </>
                                     )}
+                                    {isEditing && reunionesOrdenadas(via).filter(r => r.grado).map(r => (
+                                        <GradoReunionEditable key={'g' + r.idx} r={r} xRatio={xRatio} yRatio={yRatio}
+                                            onMove={(gx, gy) => setVias(prev => prev.map((v, i) => i !== idx ? v : { ...v, intermedios: v.intermedios.map((q, k) => k === r.idx ? { ...q, gdx: gx - q.x, gdy: gy - q.y } : q) }))}
+                                            contenedorRef={contenedorRef} pan={pan} scale={scale} />
+                                    ))}
                                 </g>
                             );
                         })}
@@ -1417,7 +1458,8 @@ export default function CroquisEscalada({ onExit, croquisInicial, registrarSalid
                             const fx = combi.fin ? combi.fin.x * xRatio : 0;
                             const fy = combi.fin ? combi.fin.y * yRatio : 0;
                             return (
-                                <g key={combi.id} onClick={e => { if (fueToque(e)) abrirCombinacion(idx); }}>
+                                <g key={combi.id} onClick={e => { if (fueToque(e)) abrirCombinacion(idx); }}
+                                    style={{ pointerEvents: (editandoViaIdx !== null || editandoCombinacionIdx !== null) && !isEditing ? 'none' : undefined }}>
                                     {/* Zona ancha e invisible para poder tocar la línea con el dedo */}
                                     <path d={generarCurvaSuave(pts)} fill="none" stroke="transparent" strokeWidth={24 / scale}
                                         style={{ pointerEvents: puedeAbrirTrazado && editandoViaIdx === null && editandoCombinacionIdx === null ? 'stroke' : 'none', cursor: 'pointer' }} />
@@ -1474,15 +1516,18 @@ export default function CroquisEscalada({ onExit, croquisInicial, registrarSalid
 
                         {/* Formas (rect, elipse, texto libre) */}
                         {formas.map(f => (
-                            <g key={f.id}>
-                                {f.tipo === 'RECT' && <rect x={f.x * xRatio} y={f.y * yRatio} width={f.w * xRatio} height={f.h * yRatio} fill="none" stroke={f.color} strokeWidth={f.grosor} />}
-                                {f.tipo === 'ELIPSE' && <ellipse cx={(f.x + f.w/2) * xRatio} cy={(f.y + f.h/2) * yRatio} rx={f.w/2 * xRatio} ry={f.h/2 * yRatio} fill="none" stroke={f.color} strokeWidth={f.grosor} />}
-                                {f.tipo === 'TEXTO_LIBRE' && (
-                                    <text x={f.x * xRatio} y={f.y * yRatio} fill={f.color} fontSize={f.fontSize || 20} fontWeight="bold"
-                                        stroke="black" strokeWidth="2" paintOrder="stroke">{f.text}</text>
-                                )}
+                            <g key={f.id} style={{ pointerEvents: 'none' }}>
+                                <FormaSvg forma={f} xRatio={xRatio} yRatio={yRatio} />
                             </g>
                         ))}
+                        {/* Editar anotaciones: arrastrar, cambiar tamaño o borrar */}
+                        {/* Dos pasadas: primero los marcos y encima todos los botones, para que ningún marco los tape */}
+                        {herramientaForma === 'EDITAR' && ['marco', 'botones'].flatMap(capa => formas.map((f, i) => (
+                            <FormaEditable key={capa + f.id} capa={capa} forma={f} xRatio={xRatio} yRatio={yRatio}
+                                onCambiar={cambios => setFormas(prev => prev.map((q, k) => k === i ? { ...q, ...cambios } : q))}
+                                onBorrar={() => setFormas(prev => prev.filter((_, k) => k !== i))}
+                                contenedorRef={contenedorRef} pan={pan} scale={scale} />
+                        )))}
 
                         {/* Preview forma en curso */}
                         {dibujando && herramientaForma === 'RECT' && (
@@ -1547,7 +1592,7 @@ export default function CroquisEscalada({ onExit, croquisInicial, registrarSalid
                         {creando && (
                             <g>
                                 <path d={generarCurvaSuave(puntosViaActual.map(p => ({ x: p.x * xRatio, y: p.y * yRatio })))} fill="none" stroke={viaActual.color} strokeWidth={viaActual.grosor || 4} strokeDasharray="8,8" />
-                                <MarcasReunion via={viaActual} xRatio={xRatio} yRatio={yRatio} />
+                                <MarcasReunion via={viaActual} xRatio={xRatio} yRatio={yRatio} sinGrados />
                                 {viaActual.textos.map((txt, tIdx) => {
                                     const stxt = { ...txt, x: txt.x * xRatio, y: txt.y * yRatio };
                                     return (
@@ -1597,6 +1642,11 @@ export default function CroquisEscalada({ onExit, croquisInicial, registrarSalid
                                             contenedorRef={contenedorRef} pan={pan} scale={scale} />
                                     </>
                                 )}
+                                {reunionesOrdenadas(viaActual).filter(r => r.grado).map(r => (
+                                    <GradoReunionEditable key={'g' + r.idx} r={r} xRatio={xRatio} yRatio={yRatio}
+                                        onMove={(gx, gy) => setViaActual(v => ({ ...v, intermedios: v.intermedios.map((q, k) => k === r.idx ? { ...q, gdx: gx - q.x, gdy: gy - q.y } : q) }))}
+                                        contenedorRef={contenedorRef} pan={pan} scale={scale} />
+                                ))}
                             </g>
                         )}
                     </svg>
@@ -1846,6 +1896,7 @@ export default function CroquisEscalada({ onExit, croquisInicial, registrarSalid
                                 }))} />
                             </div>
                             <EditorLargos via={viaActual}
+                                onTam={(pIdx, t) => setViaActual(p => ({ ...p, intermedios: p.intermedios.map((q, i) => i === pIdx ? { ...q, gradoTam: t } : q) }))}
                                 onGrado={(pIdx, g) => setViaActual(p => ({ ...p, intermedios: p.intermedios.map((q, i) => i === pIdx ? { ...q, grado: g } : q) }))}
                                 onQuitar={pIdx => setViaActual(p => ({ ...p, intermedios: p.intermedios.filter((_, i) => i !== pIdx) }))} />
                             <InputModal label="Número en la pared" value={viaActual.info.numero} onChange={v => setViaActual(p => ({ ...p, info: { ...p.info, numero: v } }))} ph="Ej: 7a (deja vacío para numeración automática)" />
@@ -1896,7 +1947,9 @@ export default function CroquisEscalada({ onExit, croquisInicial, registrarSalid
                 const via = gradoReunion.viaIdx === null ? viaActual : vias[gradoReunion.viaIdx];
                 const n = via ? reunionesOrdenadas(via).findIndex(r => r.idx === gradoReunion.pIdx) + 1 : 0;
                 const cerrar = (grado) => {
-                    const poner = v => ({ ...v, intermedios: v.intermedios.map((q, i) => i === gradoReunion.pIdx ? { ...q, grado } : q) });
+                    const tam = gradoReunion.tam || TAM_GRADO_REUNION;
+                    if (grado) ultimoTamReunion.current = tam;
+                    const poner = v => ({ ...v, intermedios: v.intermedios.map((q, i) => i === gradoReunion.pIdx ? { ...q, grado, ...(grado ? { gradoTam: tam } : {}) } : q) });
                     if (gradoReunion.viaIdx === null) setViaActual(poner);
                     else setVias(prev => prev.map((v, i) => i === gradoReunion.viaIdx ? poner(v) : v));
                     setGradoReunion(null);
@@ -1913,6 +1966,8 @@ export default function CroquisEscalada({ onExit, croquisInicial, registrarSalid
                                     Grado del largo {n || ''} (hasta esta reunión), si lo sabes. El último largo, hasta el final, lleva el grado de la vía.
                                 </p>
                                 <GradeSelector value={gradoReunion.grado} onChange={g => setGradoReunion(r => ({ ...r, grado: g }))} />
+                                <TamGradoReunion valor={gradoReunion.tam ?? ultimoTamReunion.current} onChange={t => setGradoReunion(r => ({ ...r, tam: t }))} />
+                                <p style={{ margin: '6px 0 0', fontSize: '0.76rem', color: '#7f8c8d' }}>Después puedes arrastrar el grado en la foto para colocarlo donde quieras.</p>
                                 <div style={{ display: 'flex', gap: 8, marginTop: 15 }}>
                                     <button onClick={() => cerrar('')} style={{ flex: 1, padding: '10px 20px', background: 'white', color: '#2c3e50', border: '1px solid #bdc3c7', borderRadius: 8, fontWeight: 'bold', cursor: 'pointer' }}>Sin grado</button>
                                     <button onClick={() => cerrar(gradoReunion.grado)} style={{ ...st.btnPrimario, flex: 1, justifyContent: 'center' }}>Aceptar</button>
@@ -2014,12 +2069,14 @@ export default function CroquisEscalada({ onExit, croquisInicial, registrarSalid
                             <input autoFocus value={textoLibreValor} onChange={e => setTextoLibreValor(e.target.value)}
                                 placeholder="Texto de anotación…" style={st.input}
                                 onKeyDown={e => { if (e.key === 'Enter' && textoLibreValor.trim()) {
-                                    setFormas(prev => [...prev, { id: Date.now(), tipo: 'TEXTO_LIBRE', x: textoLibrePos.x, y: textoLibrePos.y, text: textoLibreValor.trim(), color: colorForma, fontSize: 20 }]);
+                                    setFormas(prev => [...prev, { id: Date.now(), tipo: 'TEXTO_LIBRE', x: textoLibrePos.x, y: textoLibrePos.y, text: textoLibreValor.trim(), color: colorForma, fontSize: tamTextoActual }]);
                                     setTextoLibrePos(null);
                                 }}} />
+                            <label style={{ ...st.label, display: 'block', marginTop: 12 }}>Tamaño: {tamTextoActual}px</label>
+                            <input type="range" min="8" max={Math.max(120, tamTextoActual)} value={tamTextoActual} onChange={e => setTamTexto(Number(e.target.value))} style={{ width: '100%' }} aria-label="Tamaño del texto" />
                             <button onClick={() => {
                                 if (textoLibreValor.trim()) {
-                                    setFormas(prev => [...prev, { id: Date.now(), tipo: 'TEXTO_LIBRE', x: textoLibrePos.x, y: textoLibrePos.y, text: textoLibreValor.trim(), color: colorForma, fontSize: 20 }]);
+                                    setFormas(prev => [...prev, { id: Date.now(), tipo: 'TEXTO_LIBRE', x: textoLibrePos.x, y: textoLibrePos.y, text: textoLibreValor.trim(), color: colorForma, fontSize: tamTextoActual }]);
                                 }
                                 setTextoLibrePos(null);
                             }} style={{ ...st.btnPrimario, width: '100%', marginTop: 14, justifyContent: 'center' }}>
@@ -2062,6 +2119,7 @@ export default function CroquisEscalada({ onExit, croquisInicial, registrarSalid
                                 />
                             </div>
                             <EditorLargos via={vias[editandoInfoViaIdx]}
+                                onTam={(pIdx, t) => setVias(prev => { const c = [...prev]; const v = c[editandoInfoViaIdx]; c[editandoInfoViaIdx] = { ...v, intermedios: v.intermedios.map((q, i) => i === pIdx ? { ...q, gradoTam: t } : q) }; return c; })}
                                 onGrado={(pIdx, g) => setVias(prev => { const c = [...prev]; const v = c[editandoInfoViaIdx]; c[editandoInfoViaIdx] = { ...v, intermedios: v.intermedios.map((q, i) => i === pIdx ? { ...q, grado: g } : q) }; return c; })}
                                 onQuitar={pIdx => setVias(prev => { const c = [...prev]; const v = c[editandoInfoViaIdx]; c[editandoInfoViaIdx] = { ...v, intermedios: v.intermedios.filter((_, i) => i !== pIdx) }; return c; })} />
                             <InputModal label="Número en la pared"
@@ -2102,7 +2160,11 @@ export default function CroquisEscalada({ onExit, croquisInicial, registrarSalid
                                 <label style={st.label}>Grado propuesto</label>
                                 <GradeSelector value={combinacionActual.info.grado} onChange={v => setCombinacionActual(p => ({ ...p, info: { ...p.info, grado: v }, textos: p.textos.map(t => t.type === 'grado' ? { ...t, text: v } : t) }))} />
                             </div>
-                            <InputModal label="Equipador/a" value={combinacionActual.info.equipador} onChange={v => setCombinacionActual(p => ({ ...p, info: { ...p.info, equipador: v } }))} ph="Nombre de quien equipó" />
+                            <div style={{ marginBottom: 15 }}>
+                                <label style={st.label}>Equipador/a</label>
+                                <EquipadorInput nombre={combinacionActual.info.equipador || ''} inputStyle={st.input}
+                                    onChange={(n, id) => setCombinacionActual(p => ({ ...p, info: { ...p.info, equipador: n, equipadorId: id } }))} />
+                            </div>
                             <InputModal label="Año" value={combinacionActual.info.anio} onChange={v => setCombinacionActual(p => ({ ...p, info: { ...p.info, anio: v } }))} type="number" ph="Ej: 2018" />
                             <label style={st.label}>Información adicional</label>
                             <textarea value={combinacionActual.info.info} onChange={e => setCombinacionActual(p => ({ ...p, info: { ...p.info, info: e.target.value } }))}
@@ -2133,10 +2195,11 @@ export default function CroquisEscalada({ onExit, croquisInicial, registrarSalid
                                     onChange={v => setCombinaciones(prev => { const c = [...prev]; c[editandoInfoCombiIdx] = { ...c[editandoInfoCombiIdx], info: { ...c[editandoInfoCombiIdx].info, grado: v }, textos: c[editandoInfoCombiIdx].textos.map(t => t.type === 'grado' ? { ...t, text: v } : t) }; return c; })}
                                 />
                             </div>
-                            <InputModal label="Equipador/a"
-                                value={combinaciones[editandoInfoCombiIdx].info?.equipador || ''}
-                                onChange={v => setCombinaciones(prev => { const c = [...prev]; c[editandoInfoCombiIdx] = { ...c[editandoInfoCombiIdx], info: { ...c[editandoInfoCombiIdx].info, equipador: v } }; return c; })}
-                                ph="Nombre de quien equipó" />
+                            <div style={{ marginBottom: 15 }}>
+                                <label style={st.label}>Equipador/a</label>
+                                <EquipadorInput nombre={combinaciones[editandoInfoCombiIdx].info?.equipador || ''} inputStyle={st.input}
+                                    onChange={(n, id) => setCombinaciones(prev => { const c = [...prev]; c[editandoInfoCombiIdx] = { ...c[editandoInfoCombiIdx], info: { ...c[editandoInfoCombiIdx].info, equipador: n, equipadorId: id } }; return c; })} />
+                            </div>
                             <InputModal label="Año"
                                 value={combinaciones[editandoInfoCombiIdx].info?.anio || ''}
                                 onChange={v => setCombinaciones(prev => { const c = [...prev]; c[editandoInfoCombiIdx] = { ...c[editandoInfoCombiIdx], info: { ...c[editandoInfoCombiIdx].info, anio: v } }; return c; })}
@@ -2256,6 +2319,10 @@ function PuntoEditable({ x, y, color, onMove, onDelete, contenedorRef, pan, scal
                         onPointerDown={empezar('asa')} onPointerMove={mover} onPointerUp={soltar} onPointerCancel={soltar} />
                 </g>
             )}
+            {/* Zona de toque invisible, más grande que el punto, para poder cogerlo con el dedo */}
+            <circle cx={x} cy={y} r={22 / scale} fill="transparent"
+                style={{ cursor: 'grab', touchAction: 'none' }}
+                onPointerDown={empezar('punto')} onPointerMove={mover} onPointerUp={soltar} onPointerCancel={soltar} />
             <circle data-punto="" cx={x} cy={y} r={(arrastre === 'punto' ? 14 : 10) / scale}
                 fill={color} fillOpacity={activo ? 0.5 : 0.85} stroke="white" strokeWidth={2 / scale}
                 style={{ cursor: 'grab', touchAction: 'none' }}
@@ -2369,8 +2436,109 @@ function AutocompleteInput({ label, value, onChange, ph, opciones }) {
 
 const COLOR_REUNION = '#16a085';
 
+// Caja que ocupa una anotación, en coordenadas de pantalla del editor
+const cajaForma = (f, xR, yR) => {
+    if (f.tipo === 'SIMBOLO') { const t = (f.tam || TAM_SIMBOLO) * xR; return { x: f.x * xR - t / 2, y: f.y * yR - t / 2, w: t, h: t }; }
+    if (f.tipo === 'TEXTO_LIBRE') { const fs = (f.fontSize || TAM_TEXTO) * xR; return { x: f.x * xR, y: f.y * yR - fs, w: Math.max(fs, fs * 0.62 * (f.text || '').length), h: fs * 1.2 }; }
+    return { x: Math.min(f.x, f.x + f.w) * xR, y: Math.min(f.y, f.y + f.h) * yR, w: Math.abs(f.w) * xR, h: Math.abs(f.h) * yR };
+};
+
+function FormaEditable({ capa, forma: f, xRatio, yRatio, onCambiar, onBorrar, contenedorRef, pan, scale }) {
+    const [arrastre, setArrastre] = useState(null);
+    const c = cajaForma(f, xRatio, yRatio);
+    const posicion = (e) => {
+        const rect = contenedorRef.current.getBoundingClientRect();
+        return { x: (e.clientX - rect.left - pan.x) / scale, y: (e.clientY - rect.top - pan.y) / scale };
+    };
+    const empezar = (e) => {
+        e.stopPropagation();
+        e.currentTarget.setPointerCapture(e.pointerId);
+        const p = posicion(e);
+        setArrastre({ px: p.x, py: p.y, x: f.x, y: f.y });
+    };
+    const mover = (e) => {
+        if (!arrastre) return;
+        e.stopPropagation();
+        const p = posicion(e);
+        onCambiar({ x: arrastre.x + (p.x - arrastre.px) / xRatio, y: arrastre.y + (p.y - arrastre.py) / yRatio });
+    };
+    const soltar = (e) => { e.stopPropagation(); setArrastre(null); };
+    // Tamaño: símbolos y textos cambian su tamaño; rectángulos y elipses su caja
+    const redimensionar = (factor) => (e) => {
+        e.stopPropagation();
+        if (f.tipo === 'SIMBOLO') onCambiar({ tam: Math.max(8, Math.round((f.tam || TAM_SIMBOLO) * factor)) });
+        else if (f.tipo === 'TEXTO_LIBRE') onCambiar({ fontSize: Math.max(6, Math.round((f.fontSize || TAM_TEXTO) * factor)) });
+        else onCambiar({ x: f.x + f.w * (1 - factor) / 2, y: f.y + f.h * (1 - factor) / 2, w: f.w * factor, h: f.h * factor });
+    };
+    const b = 11 / scale; // radio de los botones, constante en pantalla
+    const boton = (cx, txt, onClick, color, etiqueta) => (
+        <g onPointerDown={e => e.stopPropagation()} onClick={onClick} style={{ cursor: 'pointer' }} role="button" aria-label={etiqueta}>
+            <circle cx={cx} cy={c.y - b * 1.6} r={b} fill={color} stroke="white" strokeWidth={1.5 / scale} />
+            <text x={cx} y={c.y - b * 1.6 + 4.5 / scale} textAnchor="middle" fill="white" fontSize={14 / scale} fontWeight="bold" pointerEvents="none">{txt}</text>
+        </g>
+    );
+    if (capa === 'botones') return (
+        <g>
+            {boton(c.x + c.w / 2 - b * 2.4, '−', redimensionar(1 / 1.15), '#34495e', 'Reducir')}
+            {boton(c.x + c.w / 2, '+', redimensionar(1.15), '#34495e', 'Ampliar')}
+            {boton(c.x + c.w / 2 + b * 2.4, '×', e => { e.stopPropagation(); onBorrar(); }, '#e74c3c', 'Borrar anotación')}
+        </g>
+    );
+    return (
+        <g data-anotacion="">
+            <rect x={c.x - 4 / scale} y={c.y - 4 / scale} width={c.w + 8 / scale} height={c.h + 8 / scale}
+                fill={arrastre ? 'rgba(52,152,219,0.25)' : 'rgba(255,255,255,0.08)'} stroke="#3498db" strokeWidth={1.5 / scale}
+                strokeDasharray={`${5 / scale},${3 / scale}`} style={{ cursor: 'move', touchAction: 'none' }}
+                onPointerDown={empezar} onPointerMove={mover} onPointerUp={soltar} onPointerCancel={soltar} />
+        </g>
+    );
+}
+
+function TamGradoReunion({ valor, onChange }) {
+    const v = valor || TAM_GRADO_REUNION;
+    return (
+        <div style={{ marginTop: 8 }}>
+            <label style={{ fontSize: '0.78rem', color: '#7f8c8d', fontWeight: 'bold', display: 'block', marginBottom: 4 }}>Tamaño del grado en la foto: {v}px</label>
+            <input type="range" min="8" max="40" value={v} onChange={e => onChange(Number(e.target.value))} style={{ width: '100%', accentColor: COLOR_REUNION }} aria-label="Tamaño del grado de la reunión" />
+        </div>
+    );
+}
+
+// Grado de una reunión que se arrastra para colocarlo donde se quiera
+function GradoReunionEditable({ r, xRatio, yRatio, onMove, contenedorRef, pan, scale }) {
+    const [arrastre, setArrastre] = useState(null); // desplazamiento entre el dedo y el texto
+    const g = posGradoReunion(r, xRatio, yRatio);
+    const tam = r.gradoTam || TAM_GRADO_REUNION;
+    const posicion = (e) => {
+        const rect = contenedorRef.current.getBoundingClientRect();
+        return { x: (e.clientX - rect.left - pan.x) / scale, y: (e.clientY - rect.top - pan.y) / scale };
+    };
+    const empezar = (e) => {
+        e.stopPropagation();
+        e.currentTarget.setPointerCapture(e.pointerId);
+        const p = posicion(e);
+        setArrastre({ dx: g.x - p.x, dy: g.y - p.y });
+    };
+    const mover = (e) => {
+        if (!arrastre) return;
+        e.stopPropagation();
+        const p = posicion(e);
+        onMove((p.x + arrastre.dx) / xRatio, (p.y + arrastre.dy) / yRatio);
+    };
+    const soltar = (e) => { e.stopPropagation(); setArrastre(null); };
+    const ancho = tam * 0.65 * r.grado.length + 8;
+    return (
+        <g data-grado-reunion="" style={{ cursor: 'move', touchAction: 'none' }}
+            onPointerDown={empezar} onPointerMove={mover} onPointerUp={soltar} onPointerCancel={soltar}>
+            <rect x={g.x - 4} y={g.y - tam * 0.75} width={ancho} height={tam * 1.5} rx={4}
+                fill={arrastre ? 'rgba(22,160,133,0.35)' : 'rgba(255,255,255,0.15)'} stroke={COLOR_REUNION} strokeWidth={1.5 / scale} strokeDasharray={`${4 / scale},${3 / scale}`} />
+            <text x={g.x} y={g.y + tam * 0.35} fill="white" stroke="black" strokeWidth={Math.max(2, tam / 4)} paintOrder="stroke" fontSize={tam} fontWeight="bold" pointerEvents="none">{r.grado}</text>
+        </g>
+    );
+}
+
 // Grado de cada largo que acaba en una reunión intermedia; el último va con el grado de la vía
-function EditorLargos({ via, onGrado, onQuitar }) {
+function EditorLargos({ via, onGrado, onQuitar, onTam }) {
     const reuniones = reunionesOrdenadas(via);
     if (!reuniones.length) return null;
     return (
@@ -2387,8 +2555,12 @@ function EditorLargos({ via, onGrado, onQuitar }) {
                             style={{ background: 'none', border: 'none', color: '#e74c3c', cursor: 'pointer', fontSize: '0.78rem' }}>Quitar</button>
                     </div>
                     <GradeSelector value={r.grado || ''} onChange={g => onGrado(r.idx, g)} />
+                    {r.grado && <TamGradoReunion valor={r.gradoTam} onChange={t => onTam(r.idx, t)} />}
                 </div>
             ))}
+            <p style={{ margin: '0 0 8px', fontSize: '0.76rem', color: '#7f8c8d' }}>
+                Para colocar el grado de una reunión donde quieras, arrástralo en la foto mientras editas la vía.
+            </p>
             <div style={{ fontSize: '0.85rem' }}>
                 <strong>L{reuniones.length + 1} · hasta el final:</strong> {via.info?.grado || 'sin grado'} <span style={{ color: '#7f8c8d' }}>(grado de la vía)</span>
             </div>

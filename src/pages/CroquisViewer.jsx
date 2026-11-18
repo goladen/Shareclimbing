@@ -16,6 +16,8 @@ import { textoRegion } from '../utils/regiones';
 import { ListaReferencias } from '../components/Referencias';
 import { ControlesListaVias, agruparVias, useConfigListaVias } from '../components/ConfigListaVias';
 import { MarcasReunion, LargosVia } from '../utils/reuniones';
+import { limitesDibujo } from '../utils/limitesDibujo';
+import { FormaSvg } from '../utils/anotaciones';
 
 const generarCurvaSuave = (puntos) => {
     if (puntos.length === 0) return "";
@@ -97,11 +99,14 @@ export default function CroquisViewer({ croquis: croquisProp, onVolver, onEditar
         const img = new Image();
         img.onload = () => {
             setImgSize({ w: img.width, h: img.height });
-            const wScale = window.innerWidth / img.width;
-            const hScale = (window.innerHeight - 120) / img.height;
+            // El encuadre inicial abarca también lo dibujado fuera de la foto
+            const lim = limitesDibujo(fotoActual, img.width, img.height,
+                fotoActual.srcW ? img.width / fotoActual.srcW : 1, fotoActual.srcH ? img.height / fotoActual.srcH : 1);
+            const wScale = window.innerWidth / lim.ancho;
+            const hScale = (window.innerHeight - 120) / lim.alto;
             const s = Math.min(wScale, hScale, 1) * 0.9;
             setScale(s);
-            setPan({ x: (window.innerWidth - img.width * s) / 2, y: 60 });
+            setPan({ x: (window.innerWidth - lim.ancho * s) / 2 - lim.x0 * s, y: 60 - lim.y0 * s });
         };
         img.src = url;
     }, [fotoIdx]); // eslint-disable-line
@@ -413,7 +418,7 @@ export default function CroquisViewer({ croquis: croquisProp, onVolver, onEditar
                     width: imgSize.w, height: imgSize.h
                 }}>
                     <img src={fotoActual?.imagenUrl} alt="Pared" style={{ display: 'block', width: '100%', height: '100%', pointerEvents: 'none' }} />
-                    <svg width={imgSize.w} height={imgSize.h} style={{ position: 'absolute', top: 0, left: 0 }}>
+                    <svg width={imgSize.w} height={imgSize.h} style={{ position: 'absolute', top: 0, left: 0, overflow: 'visible' }}>
                         {vias.map((via, idx) => {
                             const dir = via.inicio && via.fin ? via.fin.y - via.inicio.y : -1;
                             const interOrd = [...(via.intermedios || [])].sort((a, b) => dir < 0 ? b.y - a.y : a.y - b.y);
@@ -438,6 +443,7 @@ export default function CroquisViewer({ croquis: croquisProp, onVolver, onEditar
                                 </g>
                             );
                         })}
+                        {(fotoActual?.formas || []).map(s => <g key={'f' + s.id} style={{ pointerEvents: 'none' }}><FormaSvg forma={s} xRatio={xRatio} yRatio={yRatio} /></g>)}
                         {mostrarCombinaciones && combinaciones.map((combi, idx) => {
                             const letra = String.fromCharCode(65 + idx);
                             const dir = combi.inicio && combi.fin ? combi.fin.y - combi.inicio.y : -1;

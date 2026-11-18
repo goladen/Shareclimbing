@@ -1,5 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { MarcasReunion } from '../utils/reuniones';
+import { limitesDibujo } from '../utils/limitesDibujo';
+import { FormaSvg } from '../utils/anotaciones';
 
 export const generarCurvaSuave = (puntos) => {
     if (puntos.length === 0) return "";
@@ -37,7 +39,9 @@ export default function CroquisImagen({ foto, onClickVia }) {
     const yRatio = natural && foto.srcH ? natural.h / foto.srcH : 1;
     // fPantalla: píxeles de la foto por píxel de pantalla. Líneas y números se reducen algo
     // en fotos pequeñas (móvil) para no tapar la pared.
-    const fPantalla = natural && anchoVisible ? natural.w / anchoVisible : 1;
+    // Si hay líneas fuera de la foto, se amplía el marco para que se vean como en el editor
+    const lim = natural ? limitesDibujo(foto, natural.w, natural.h, xRatio, yRatio) : null;
+    const fPantalla = natural && anchoVisible ? lim.ancho / anchoVisible : 1;
     const f = fPantalla * (anchoVisible ? Math.min(1, Math.max(0.6, anchoVisible / 600)) : 1);
 
     const dibujarLinea = (via, marca, discontinua, onClick) => {
@@ -68,19 +72,19 @@ export default function CroquisImagen({ foto, onClickVia }) {
     };
 
     return (
-        <div ref={contRef} style={{ position: 'relative', width: '100%', lineHeight: 0 }}>
+        <div ref={contRef} style={{ position: 'relative', width: '100%', lineHeight: 0, boxSizing: 'border-box',
+            // Los rellenos en % se miden sobre el ancho: el marco ampliado mide lim.ancho unidades de la foto
+            ...(lim?.fuera ? {
+                background: '#dfe4ea', borderRadius: 8,
+                paddingLeft: `${-lim.x0 / lim.ancho * 100}%`, paddingRight: `${(lim.x1 - natural.w) / lim.ancho * 100}%`,
+                paddingTop: `${-lim.y0 / lim.ancho * 100}%`, paddingBottom: `${(lim.y1 - natural.h) / lim.ancho * 100}%`,
+            } : {}) }}>
             <img src={foto.imagenUrl} alt="Pared"
                 onLoad={e => setNatural({ w: e.target.naturalWidth, h: e.target.naturalHeight })}
                 style={{ display: 'block', width: '100%', height: 'auto', borderRadius: 8 }} />
             {natural && (
-                <svg viewBox={`0 0 ${natural.w} ${natural.h}`} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }}>
-                    {(foto.formas || []).map(s => (
-                        <g key={s.id}>
-                            {s.tipo === 'RECT' && <rect x={s.x * xRatio} y={s.y * yRatio} width={s.w * xRatio} height={s.h * yRatio} fill="none" stroke={s.color} strokeWidth={s.grosor * f} />}
-                            {s.tipo === 'ELIPSE' && <ellipse cx={(s.x + s.w / 2) * xRatio} cy={(s.y + s.h / 2) * yRatio} rx={s.w / 2 * xRatio} ry={s.h / 2 * yRatio} fill="none" stroke={s.color} strokeWidth={s.grosor * f} />}
-                            {s.tipo === 'TEXTO_LIBRE' && <text x={s.x * xRatio} y={s.y * yRatio} fill={s.color} stroke="white" strokeWidth={2 * f} paintOrder="stroke" fontSize={Math.max((s.fontSize || 20) * xRatio, 8 * fPantalla)} fontWeight="bold">{s.text}</text>}
-                        </g>
-                    ))}
+                <svg viewBox={`${lim.x0} ${lim.y0} ${lim.ancho} ${lim.alto}`} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }}>
+                    {(foto.formas || []).map(s => <g key={s.id}><FormaSvg forma={s} xRatio={xRatio} yRatio={yRatio} f={f} /></g>)}
                     {(foto.vias || []).map((v, i) => dibujarLinea(v, i + 1, false, () => onClickVia?.({ ...v, num: i + 1 })))}
                     {(foto.combinaciones || []).map((c, i) => {
                         const letra = String.fromCharCode(65 + i);

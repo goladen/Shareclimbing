@@ -13,7 +13,9 @@ const ordenarPuntos = (v) => {
 // Recalcula vías, combinaciones y anotaciones para la foto nueva.
 // La foto nueva ocupa en el sistema de la anterior el rectángulo (ox, oy, ancho·k, alto·k).
 export function reajustarFoto(foto, { ox, oy, k }) {
-    const punto = (p) => p && { ...p, x: (p.x - ox) / k, y: (p.y - oy) / k };
+    const punto = (p) => p && { ...p, x: (p.x - ox) / k, y: (p.y - oy) / k,
+        // El grado de una reunión se guarda desplazado respecto a ella: se escala igual
+        ...(p.gdx != null ? { gdx: p.gdx / k, gdy: p.gdy / k } : {}) };
     // Solo se tocan los tamaños que existen: Firestore no admite valores undefined
     const tam = (o) => (o.fontSize ? { fontSize: Math.max(6, Math.round(o.fontSize / k)) } : {});
     const grosor = (g) => Math.min(14, Math.max(1, Math.round((g || 4) / k)));

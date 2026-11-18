@@ -79,12 +79,22 @@ export default function EquipadorPagina({ equipadorId, onVolver, onVerCroquis })
 
     useAccesoDirecto(equipador && puedeVerEquipador(equipador, usuario) ? nombreEquipador(equipador) : null);
 
-    const vias = croquis.flatMap(c => fotosDeCroquis(c).flatMap(f => (f.vias || [])
-        .filter(v => esDeEquipador(v.info, equipador || {}))
-        .map(v => ({ via: v, croquis: c }))));
+    // Las combinaciones también son vías del equipador; se marcan para no editarlas como vía
+    const vias = croquis.flatMap(c => fotosDeCroquis(c).flatMap(f => [
+        ...(f.vias || []).map(v => ({ via: v, croquis: c })),
+        ...(f.combinaciones || []).map(v => ({ via: v, croquis: c, esCombi: true })),
+    ].filter(item => esDeEquipador(item.via.info, equipador || {}))));
 
     // Vías subidas en bloque que aún no están en ningún croquis
     const [subidas, setSubidas] = useState(null);
+    const [editandoSubida, setEditandoSubida] = useState(null);
+    // Cambia o borra (cambios = null) una vía subida sin croquis
+    const guardarSubida = async (original, cambios) => {
+        const lista = (subidas || []).flatMap(v => v !== original ? [v] : cambios ? [{ ...v, ...cambios }] : []);
+        await guardarViasDeEquipador(equipador.id, nombreEquipador(equipador), lista);
+        setSubidas(lista);
+        setEditandoSubida(null);
+    };
     useEffect(() => { cargarViasDeEquipador(equipadorId).then(setSubidas).catch(() => setSubidas([])); }, [equipadorId]);
     const enCroquis = clavesEnCroquis(croquis);
     const sinCroquis = (subidas || []).filter(v => !enCroquis.has(claveVia(v.escuela, v.nombre)));
@@ -205,18 +215,21 @@ export default function EquipadorPagina({ equipadorId, onVolver, onVerCroquis })
                                                     </span>
                                                 </div>
                                                 <span style={st.sinCroquis}>Sin croquis</span>
+                                                {mia && (
+                                                    <button onClick={() => setEditandoSubida(item.subida)} style={st.btnEditar} title="Editar vía"><Edit size={15} /></button>
+                                                )}
                                             </div>
                                         ) : (
-                                            <div key={`${item.croquis.id}-${item.via.id}`} style={st.fila}>
+                                            <div key={`${item.croquis.id}-${item.esCombi ? 'c' : ''}${item.via.id}`} style={st.fila}>
                                                 <button onClick={() => onVerCroquis(item.croquis)} style={st.filaPrincipal}>
                                                     <span style={{ ...st.grado, background: item.via.color || '#2c3e50' }}>{item.via.info?.grado || '?'}</span>
                                                     <span style={{ flex: 1, minWidth: 0, textAlign: 'left' }}>
                                                         <strong style={{ overflowWrap: 'anywhere' }}>{item.via.info?.nombre}</strong>
-                                                        {item.via.info?.anio && <span style={{ display: 'block', fontSize: '0.8rem', color: '#7f8c8d' }}>{item.via.info.anio}</span>}
+                                                        {(item.via.info?.anio || item.esCombi) && <span style={{ display: 'block', fontSize: '0.8rem', color: '#7f8c8d' }}>{[item.esCombi && 'Combinación', item.via.info?.anio].filter(Boolean).join(' · ')}</span>}
                                                     </span>
                                                 </button>
-                                                {pendientes.has(`${item.croquis.id}/${item.via.id}`) && <span style={st.pendiente}>Propuesta pendiente</span>}
-                                                {mia && (
+                                                {!item.esCombi && pendientes.has(`${item.croquis.id}/${item.via.id}`) && <span style={st.pendiente}>Propuesta pendiente</span>}
+                                                {mia && !item.esCombi && (
                                                     <button onClick={() => setEditando(item)} style={st.btnEditar} title="Editar vía"><Edit size={15} /></button>
                                                 )}
                                             </div>
@@ -233,6 +246,10 @@ export default function EquipadorPagina({ equipadorId, onVolver, onVerCroquis })
                 <EditarViaModal item={editando} directo={puedeEditarCroquis(editando.croquis, usuario)}
                     onClose={() => setEditando(null)}
                     onGuardar={async (cambios) => { await cambiarVia(editando, cambios); setEditando(null); }} />
+            )}
+            {editandoSubida && (
+                <EditarSubidaModal via={editandoSubida} onClose={() => setEditandoSubida(null)}
+                    onGuardar={cambios => guardarSubida(editandoSubida, cambios)} />
             )}
             {anadiendo && (
                 <AnadirViaModal equipador={equipador} croquis={croquis} usuario={usuario} pendientes={pendientes}
@@ -479,6 +496,61 @@ function EditarViaModal({ item, directo, onClose, onGuardar }) {
             <p style={st.ayuda}>{directo ? 'Puedes editar este croquis: el cambio se aplica al momento.' : 'El croquis es de otra persona: le llegará como propuesta y se aplicará cuando la acepte.'}</p>
             <button onClick={guardar} disabled={guardando} style={{ ...st.btnPrimario, width: '100%', marginTop: 6 }}>
                 {guardando ? 'Guardando…' : directo ? 'Guardar' : 'Enviar propuesta'}
+            </button>
+        </Modal>
+    );
+}
+
+// Editar o borrar una vía subida que aún no está en ningún croquis
+function EditarSubidaModal({ via, onClose, onGuardar }) {
+    const [form, setForm] = useState({ nombre: via.nombre || '', grado: via.grado || '', anio: via.anio || '', info: via.info || '', escuela: via.escuela || '', sector: via.sector || '' });
+    const [guardando, setGuardando] = useState(false);
+    const [error, setError] = useState('');
+    const campo = (k) => ({ value: form[k], onChange: e => setForm(f => ({ ...f, [k]: e.target.value })) });
+
+    const ejecutar = async (cambios) => {
+        setGuardando(true);
+        setError('');
+        try { await onGuardar(cambios); }
+        catch (e) { setError('No se pudo guardar: ' + e.message); setGuardando(false); }
+    };
+    const guardar = () => {
+        if (!form.nombre.trim()) { setError('La vía necesita un nombre.'); return; }
+        if (!form.escuela.trim() || !form.sector.trim()) { setError('Indica la escuela y el sector.'); return; }
+        ejecutar({
+            nombre: form.nombre.trim().slice(0, 120), grado: form.grado, anio: String(form.anio).trim(),
+            info: form.info.trim().slice(0, 1000), escuela: form.escuela.trim().slice(0, 120), sector: form.sector.trim().slice(0, 120),
+        });
+    };
+    const borrar = () => { if (window.confirm(`¿Borrar «${via.nombre}» de tus vías sin croquis?`)) ejecutar(null); };
+
+    return (
+        <Modal titulo="Editar vía sin croquis" onClose={onClose}>
+            {error && <div style={st.error}>{error}</div>}
+            <label style={st.label}>Nombre de la vía</label>
+            <input {...campo('nombre')} style={st.input} />
+            <label style={st.label}>Grado</label>
+            <GradeSelector value={form.grado} onChange={g => setForm(f => ({ ...f, grado: g }))} />
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                <div>
+                    <label style={st.label}>Escuela</label>
+                    <input {...campo('escuela')} style={st.input} />
+                </div>
+                <div>
+                    <label style={st.label}>Sector</label>
+                    <input {...campo('sector')} style={st.input} />
+                </div>
+            </div>
+            <label style={st.label}>Año</label>
+            <input type="number" {...campo('anio')} placeholder="Ej: 2018" style={st.input} />
+            <label style={st.label}>Información adicional</label>
+            <textarea {...campo('info')} rows={3} style={{ ...st.input, resize: 'vertical', fontFamily: 'inherit' }} />
+            <button onClick={guardar} disabled={guardando} style={{ ...st.btnPrimario, width: '100%', marginTop: 6 }}>
+                {guardando ? 'Guardando…' : 'Guardar'}
+            </button>
+            <button onClick={borrar} disabled={guardando}
+                style={{ width: '100%', marginTop: 8, padding: 10, background: 'white', color: '#e74c3c', border: '1px solid #e74c3c', borderRadius: 8, fontWeight: 'bold', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
+                <Trash2 size={15} /> Borrar vía
             </button>
         </Modal>
     );
