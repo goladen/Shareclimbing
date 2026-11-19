@@ -60,6 +60,8 @@ export function FormaSvg({ forma: s, xRatio = 1, yRatio = 1, f = 1 }) {
         const k = (s.tam || TAM_SIMBOLO) * xRatio / 24;
         return (
             <g transform={`translate(${s.x * xRatio} ${s.y * yRatio}) rotate(${s.rot || 0}) scale(${k})`}>
+                <title>{def.nombre}</title>
+                <rect x={-12} y={-12} width={24} height={24} fill="transparent" />
                 {def.trazos.map((t, i) => <path key={'h' + i} d={t.d} fill="none" stroke="white" strokeWidth={(t.fino ? 1.2 : 2) + 2} strokeLinecap="round" strokeLinejoin="round" opacity={0.85} />)}
                 {def.trazos.map((t, i) => <path key={i} d={t.d} fill={t.relleno ? s.color : 'none'} fillOpacity={t.relleno || 0}
                     stroke={s.color} strokeWidth={t.fino ? 1.2 : 2} strokeLinecap="round" strokeLinejoin="round" />)}

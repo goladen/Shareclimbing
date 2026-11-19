@@ -443,7 +443,7 @@ export default function CroquisViewer({ croquis: croquisProp, onVolver, onEditar
                                 </g>
                             );
                         })}
-                        {(fotoActual?.formas || []).map(s => <g key={'f' + s.id} style={{ pointerEvents: 'none' }}><FormaSvg forma={s} xRatio={xRatio} yRatio={yRatio} /></g>)}
+                        {(fotoActual?.formas || []).map(s => <g key={'f' + s.id} style={{ pointerEvents: s.tipo === 'SIMBOLO' ? 'auto' : 'none' }}><FormaSvg forma={s} xRatio={xRatio} yRatio={yRatio} /></g>)}
                         {mostrarCombinaciones && combinaciones.map((combi, idx) => {
                             const letra = String.fromCharCode(65 + idx);
                             const dir = combi.inicio && combi.fin ? combi.fin.y - combi.inicio.y : -1;

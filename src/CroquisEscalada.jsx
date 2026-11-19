@@ -164,6 +164,8 @@ export default function CroquisEscalada({ onExit, croquisInicial, registrarSalid
     const [colorForma, setColorForma] = useState('#e74c3c');
     const [grosorForma, setGrosorForma] = useState(2);
     const [simboloElegido, setSimboloElegido] = useState('arbol');
+    // Anotación seleccionada en «Mover / tamaño»: solo ella muestra sus botones
+    const [anotacionSel, setAnotacionSel] = useState(null);
     // Tamaños de los símbolos y textos nuevos, en píxeles de la foto (null: proporcional a la foto)
     const [tamSimbolo, setTamSimbolo] = useState(null);
     const [tamTexto, setTamTexto] = useState(null);
@@ -323,13 +325,28 @@ export default function CroquisEscalada({ onExit, croquisInicial, registrarSalid
 
     const crearSoloLista = () => setFotos(fs => fs.map((f, i) => i === fotoIdx ? { ...f, soloLista: true } : f));
 
+    // Vía recién añadida a la tabla sin dibujar su línea
+    const [viaSinLineaNueva, setViaSinLineaNueva] = useState(null);
+    const [bloqueAbierto, setBloqueAbierto] = useState(false);
+
     const anadirViaALista = () => {
+        setViaSinLineaNueva(vias.length);
         setVias(prev => [...prev, {
             id: Date.now(), inicio: null, fin: null, intermedios: [], textos: [],
             info: { nombre: '', grado: '', equipador: '', info: '', anio: '', numero: '' },
             color: COLORES[prev.length % COLORES.length], grosor: 4
         }]);
         setEditandoInfoViaIdx(vias.length);
+    };
+
+    const anadirViasEnBloque = (nuevas) => {
+        setVias(prev => [...prev, ...nuevas.map((v, k) => ({
+            id: Date.now() + k, inicio: null, fin: null, intermedios: [], textos: [],
+            info: { nombre: v.nombre, grado: v.grado, equipador: v.equipador, info: v.info, anio: v.anio, numero: '' },
+            color: COLORES[(prev.length + k) % COLORES.length], grosor: 4,
+        }))]);
+        setBloqueAbierto(false);
+        if (!esAjeno) setAutoGuardar(true);
     };
 
     const moverViaEnLista = (idx, delta) => setVias(prev => {
@@ -343,9 +360,11 @@ export default function CroquisEscalada({ onExit, croquisInicial, registrarSalid
     // En una lista sin foto, una vía que se deja sin nombre se descarta
     const cerrarInfoVia = () => {
         const idx = editandoInfoViaIdx;
-        if (foto.soloLista && !vias[idx]?.info?.nombre?.trim()) setVias(prev => prev.filter((_, i) => i !== idx));
-        // En una lista sin foto, cerrar la ficha con nombre equivale a crear la vía
-        else if (foto.soloLista && !esAjeno) setAutoGuardar(true);
+        const nuevaSinLinea = foto.soloLista || idx === viaSinLineaNueva;
+        if (nuevaSinLinea && !vias[idx]?.info?.nombre?.trim()) setVias(prev => prev.filter((_, i) => i !== idx));
+        // Cerrar la ficha de una vía nueva sin línea, con nombre, equivale a crearla
+        else if (nuevaSinLinea && !esAjeno) setAutoGuardar(true);
+        setViaSinLineaNueva(null);
         setEditandoInfoViaIdx(null);
     };
 
@@ -834,9 +853,11 @@ export default function CroquisEscalada({ onExit, croquisInicial, registrarSalid
     };
 
     const guardarVia = () => {
-        if (!viaActual.inicio || !viaActual.fin) { alert("La vía necesita punto de INICIO y FIN."); return; }
+        // La línea es opcional: se puede guardar la vía y dibujarla más adelante
         if (!viaActual.info.nombre.trim()) { alert("Dale un nombre a la vía (botón ℹ️)."); return; }
-        const nuevasVias = [...vias, { ...viaActual, id: Date.now() }].sort((a, b) => a.inicio.x - b.inicio.x);
+        const nueva = { ...viaActual, id: Date.now() };
+        // Las vías con línea se ordenan de izquierda a derecha; las que no tienen, al final
+        const nuevasVias = nueva.inicio ? [...vias, nueva].sort((a, b) => (a.inicio?.x ?? Infinity) - (b.inicio?.x ?? Infinity)) : [...vias, nueva];
         setVias(nuevasVias);
         setCreando(false);
         setHerramienta('PAN');
@@ -1299,7 +1320,7 @@ export default function CroquisEscalada({ onExit, croquisInicial, registrarSalid
                         )}
                         {herramientaForma && (
                             <span style={{ fontSize: '0.82rem', color: '#e74c3c', fontWeight: 'bold' }}>
-                                {herramientaForma === 'EDITAR' ? 'Arrastra una anotación para moverla; usa − / + para su tamaño y × para borrarla'
+                                {herramientaForma === 'EDITAR' ? 'Toca una anotación para seleccionarla y arrástrala para moverla; − / + cambian su tamaño, ⟲ ⟳ giran los dibujos y × la borra'
                                     : herramientaForma === 'SIMBOLO' ? `Clic en la imagen para poner: ${SIMBOLOS[simboloElegido].nombre.toLowerCase()}`
                                     : `Clic y arrastra sobre la imagen (${herramientaForma === 'TEXTO_LIBRE' ? 'clic para texto' : herramientaForma.toLowerCase()})`}
                             </span>
@@ -1516,14 +1537,14 @@ export default function CroquisEscalada({ onExit, croquisInicial, registrarSalid
 
                         {/* Formas (rect, elipse, texto libre) */}
                         {formas.map(f => (
-                            <g key={f.id} style={{ pointerEvents: 'none' }}>
+                            <g key={f.id} style={{ pointerEvents: f.tipo === 'SIMBOLO' && !creando && !esCreandoCombinacion && editandoViaIdx === null && editandoCombinacionIdx === null && herramientaForma !== 'EDITAR' ? 'auto' : 'none' }}>
                                 <FormaSvg forma={f} xRatio={xRatio} yRatio={yRatio} />
                             </g>
                         ))}
                         {/* Editar anotaciones: arrastrar, cambiar tamaño o borrar */}
                         {/* Dos pasadas: primero los marcos y encima todos los botones, para que ningún marco los tape */}
-                        {herramientaForma === 'EDITAR' && ['marco', 'botones'].flatMap(capa => formas.map((f, i) => (
-                            <FormaEditable key={capa + f.id} capa={capa} forma={f} xRatio={xRatio} yRatio={yRatio}
+                        {herramientaForma === 'EDITAR' && ['marco', 'botones'].flatMap(capa => formas.map((f, i) => (capa === 'botones' && f.id !== anotacionSel) ? null : (
+                            <FormaEditable key={capa + f.id} capa={capa} forma={f} seleccionada={f.id === anotacionSel} onSeleccionar={() => setAnotacionSel(f.id)} xRatio={xRatio} yRatio={yRatio}
                                 onCambiar={cambios => setFormas(prev => prev.map((q, k) => k === i ? { ...q, ...cambios } : q))}
                                 onBorrar={() => setFormas(prev => prev.filter((_, k) => k !== i))}
                                 contenedorRef={contenedorRef} pan={pan} scale={scale} />
@@ -1667,6 +1688,16 @@ export default function CroquisEscalada({ onExit, croquisInicial, registrarSalid
                             style={{ marginLeft: 10, fontSize: '0.85rem', color: '#3498db' }}>Ver mapa</a>
                     )}
                 </h3>
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 10 }}>
+                    {!foto.soloLista && (
+                        <button onClick={anadirViaALista} style={st.btnSecundarioLista} title="Añadir a la tabla una vía sin dibujar su línea">
+                            <Plus size={15} /> Vía sin línea
+                        </button>
+                    )}
+                    <button onClick={() => setBloqueAbierto(true)} style={st.btnSecundarioLista} title="Añadir varias vías, una por línea">
+                        <List size={15} /> Añadir en bloque
+                    </button>
+                </div>
                 {vias.length === 0 ? (
                     <div style={{ color: '#7f8c8d', fontStyle: 'italic', textAlign: 'center', padding: 15 }}>No hay vías. ¡Crea la primera!</div>
                 ) : (
@@ -1872,6 +1903,8 @@ export default function CroquisEscalada({ onExit, croquisInicial, registrarSalid
                     </div>
                 </div>
             )}
+
+            {bloqueAbierto && <ViasEnBloqueModal onClose={() => setBloqueAbierto(false)} onAnadir={anadirViasEnBloque} />}
 
             {/* MODAL: Info vía en creación */}
             {mostrarModalInfo && (
@@ -2436,6 +2469,66 @@ function AutocompleteInput({ label, value, onChange, ph, opciones }) {
 
 const COLOR_REUNION = '#16a085';
 
+// Una vía por línea: «nombre; grado; año; equipador; información». Solo el nombre es obligatorio.
+// También vale separar con tabuladores (pegado desde una hoja de cálculo).
+export function parsearViasLista(texto) {
+    const vias = [];
+    const errores = [];
+    texto.split(/\r?\n/).forEach((linea, i) => {
+        const l = linea.trim();
+        if (!l || l.startsWith('#')) return;
+        const [nombre = '', grado = '', anio = '', equipador = '', ...resto] = l.split(/[;\t]/).map(c => c.trim());
+        if (!nombre) { errores.push({ linea: i + 1, texto: l, motivo: 'Falta el nombre' }); return; }
+        if (anio && !/^(1[89]|20)\d{2}$/.test(anio)) { errores.push({ linea: i + 1, texto: l, motivo: 'El año no es válido' }); return; }
+        vias.push({ nombre: nombre.slice(0, 120), grado: grado.replace(/\s+/g, '').slice(0, 20), anio, equipador: equipador.slice(0, 120), info: resto.join('; ').slice(0, 1000) });
+    });
+    return { vias, errores };
+}
+
+function ViasEnBloqueModal({ onClose, onAnadir }) {
+    const [texto, setTexto] = useState('');
+    const { vias, errores } = parsearViasLista(texto);
+    return (
+        <div style={st.overlayModal}>
+            <div style={{ ...st.modal, maxWidth: 560 }}>
+                <div style={st.modalHeader}>
+                    <h3>Añadir vías en bloque</h3>
+                    <button onClick={onClose} style={st.btnClose} aria-label="Cerrar"><X size={20} /></button>
+                </div>
+                <div style={st.modalBody}>
+                    <p style={{ marginTop: 0, fontSize: '0.85rem', color: '#7f8c8d' }}>
+                        Una vía por línea: <b>nombre; grado; año; equipador; información</b>. Solo el nombre es obligatorio
+                        y se añaden en este orden, sin línea dibujada.
+                    </p>
+                    <textarea value={texto} onChange={e => setTexto(e.target.value)} rows={8} autoFocus
+                        placeholder={'La Vía Láctea; 6b+; 2018; Luis Equipa\nEl Diedro; 7a\nSin nombre aún; ?'}
+                        style={{ ...st.input, fontFamily: 'monospace', fontSize: '0.85rem', resize: 'vertical' }} aria-label="Vías, una por línea" />
+                    {errores.length > 0 && (
+                        <div style={{ background: '#fdecea', color: '#c0392b', borderRadius: 8, padding: '8px 12px', fontSize: '0.8rem', marginTop: 8 }}>
+                            {errores.map(e => <div key={e.linea}>Línea {e.linea}: {e.motivo} — «{e.texto}»</div>)}
+                        </div>
+                    )}
+                    {vias.length > 0 && (
+                        <div style={{ marginTop: 10, maxHeight: 180, overflowY: 'auto', border: '1px solid #ecf0f1', borderRadius: 8 }}>
+                            {vias.map((v, i) => (
+                                <div key={i} style={{ display: 'flex', gap: 8, padding: '5px 10px', fontSize: '0.82rem', borderBottom: '1px solid #f4f6f7' }}>
+                                    <b style={{ color: '#e74c3c', minWidth: 34 }}>{v.grado || '–'}</b>
+                                    <span style={{ flex: 1, minWidth: 0, overflowWrap: 'anywhere' }}>{v.nombre}</span>
+                                    <span style={{ color: '#7f8c8d' }}>{[v.anio, v.equipador].filter(Boolean).join(' · ')}</span>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                    <button onClick={() => onAnadir(vias)} disabled={!vias.length || errores.length > 0}
+                        style={{ ...st.btnPrimario, width: '100%', marginTop: 14, justifyContent: 'center', opacity: !vias.length || errores.length ? 0.5 : 1 }}>
+                        {vias.length ? `Añadir ${vias.length} ${vias.length === 1 ? 'vía' : 'vías'}` : 'Añadir'}
+                    </button>
+                </div>
+            </div>
+        </div>
+    );
+}
+
 // Caja que ocupa una anotación, en coordenadas de pantalla del editor
 const cajaForma = (f, xR, yR) => {
     if (f.tipo === 'SIMBOLO') { const t = (f.tam || TAM_SIMBOLO) * xR; return { x: f.x * xR - t / 2, y: f.y * yR - t / 2, w: t, h: t }; }
@@ -2443,7 +2536,7 @@ const cajaForma = (f, xR, yR) => {
     return { x: Math.min(f.x, f.x + f.w) * xR, y: Math.min(f.y, f.y + f.h) * yR, w: Math.abs(f.w) * xR, h: Math.abs(f.h) * yR };
 };
 
-function FormaEditable({ capa, forma: f, xRatio, yRatio, onCambiar, onBorrar, contenedorRef, pan, scale }) {
+function FormaEditable({ capa, forma: f, seleccionada, onSeleccionar, xRatio, yRatio, onCambiar, onBorrar, contenedorRef, pan, scale }) {
     const [arrastre, setArrastre] = useState(null);
     const c = cajaForma(f, xRatio, yRatio);
     const posicion = (e) => {
@@ -2453,6 +2546,7 @@ function FormaEditable({ capa, forma: f, xRatio, yRatio, onCambiar, onBorrar, co
     const empezar = (e) => {
         e.stopPropagation();
         e.currentTarget.setPointerCapture(e.pointerId);
+        onSeleccionar();
         const p = posicion(e);
         setArrastre({ px: p.x, py: p.y, x: f.x, y: f.y });
     };
@@ -2470,6 +2564,7 @@ function FormaEditable({ capa, forma: f, xRatio, yRatio, onCambiar, onBorrar, co
         else if (f.tipo === 'TEXTO_LIBRE') onCambiar({ fontSize: Math.max(6, Math.round((f.fontSize || TAM_TEXTO) * factor)) });
         else onCambiar({ x: f.x + f.w * (1 - factor) / 2, y: f.y + f.h * (1 - factor) / 2, w: f.w * factor, h: f.h * factor });
     };
+    const girar = (grados) => (e) => { e.stopPropagation(); onCambiar({ rot: (((f.rot || 0) + grados) % 360 + 360) % 360 }); };
     const b = 11 / scale; // radio de los botones, constante en pantalla
     const boton = (cx, txt, onClick, color, etiqueta) => (
         <g onPointerDown={e => e.stopPropagation()} onClick={onClick} style={{ cursor: 'pointer' }} role="button" aria-label={etiqueta}>
@@ -2482,14 +2577,20 @@ function FormaEditable({ capa, forma: f, xRatio, yRatio, onCambiar, onBorrar, co
             {boton(c.x + c.w / 2 - b * 2.4, '−', redimensionar(1 / 1.15), '#34495e', 'Reducir')}
             {boton(c.x + c.w / 2, '+', redimensionar(1.15), '#34495e', 'Ampliar')}
             {boton(c.x + c.w / 2 + b * 2.4, '×', e => { e.stopPropagation(); onBorrar(); }, '#e74c3c', 'Borrar anotación')}
+            {f.tipo === 'SIMBOLO' && <>
+                {boton(c.x + c.w / 2 - b * 4.8, '⟲', girar(-15), '#8e44ad', 'Girar a la izquierda')}
+                {boton(c.x + c.w / 2 + b * 4.8, '⟳', girar(15), '#8e44ad', 'Girar a la derecha')}
+            </>}
         </g>
     );
     return (
         <g data-anotacion="">
             <rect x={c.x - 4 / scale} y={c.y - 4 / scale} width={c.w + 8 / scale} height={c.h + 8 / scale}
-                fill={arrastre ? 'rgba(52,152,219,0.25)' : 'rgba(255,255,255,0.08)'} stroke="#3498db" strokeWidth={1.5 / scale}
+                fill={arrastre ? 'rgba(52,152,219,0.25)' : 'rgba(255,255,255,0.08)'} stroke="#3498db" strokeWidth={(seleccionada ? 3 : 1.5) / scale}
                 strokeDasharray={`${5 / scale},${3 / scale}`} style={{ cursor: 'move', touchAction: 'none' }}
-                onPointerDown={empezar} onPointerMove={mover} onPointerUp={soltar} onPointerCancel={soltar} />
+                onPointerDown={empezar} onPointerMove={mover} onPointerUp={soltar} onPointerCancel={soltar}>
+                <title>{f.tipo === 'SIMBOLO' ? SIMBOLOS[f.simbolo]?.nombre : f.tipo === 'TEXTO_LIBRE' ? f.text : f.tipo === 'RECT' ? 'Rectángulo' : 'Elipse'}</title>
+            </rect>
         </g>
     );
 }
@@ -2703,6 +2804,7 @@ const st = {
     // Altura máxima de la pantalla: el contenido se desplaza y el botón Guardar siempre es alcanzable
     modal: { background: 'white', width: '100%', maxWidth: 500, maxHeight: 'calc(100dvh - 40px)', display: 'flex', flexDirection: 'column', borderRadius: 15, overflow: 'hidden', boxShadow: '0 20px 50px rgba(0,0,0,0.3)' },
     modalHeader: { background: '#f8f9fa', padding: '15px 20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #ecf0f1', flexShrink: 0 },
+    btnSecundarioLista: { display: 'flex', alignItems: 'center', gap: 5, padding: '7px 12px', background: 'white', color: '#2c3e50', border: '1px solid #bdc3c7', borderRadius: 8, fontWeight: 'bold', fontSize: '0.82rem', cursor: 'pointer' },
     modalBody: { padding: 25, overflowY: 'auto', WebkitOverflowScrolling: 'touch', minHeight: 0 },
     btnClose: { background: 'none', border: 'none', color: '#7f8c8d', cursor: 'pointer' },
     label: { display: 'block', fontWeight: 'bold', color: '#34495e', marginBottom: 5, fontSize: '0.9rem' },
